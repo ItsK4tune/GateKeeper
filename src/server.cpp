@@ -8,7 +8,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace redismini
+namespace gatekeeper
 {
 
 Server::Server(int port) : port(port), server_fd(-1) {}
@@ -52,7 +52,7 @@ void Server::SetupSocket()
         throw std::runtime_error("Failed to listen");
     }
 
-    std::cout << "Redis server listening on port " << port << '\n';
+    std::cout << "GateKeeper server listening on port " << port << '\n';
 }
 
 void Server::AcceptSocket()
@@ -90,4 +90,4 @@ void Server::AcceptSocket()
     close(client_fd);
 }
 
-} // namespace redismini
+} // namespace gatekeeper

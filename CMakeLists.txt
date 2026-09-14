@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(RedisMini
+project(GateKeeper
     VERSION 0.1.0
     LANGUAGES CXX
 )
@@ -11,12 +11,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(redis-mini
+add_executable(gatekeeper
     src/main.cpp
     src/server.cpp
 )
 
-target_include_directories(redis-mini
+target_include_directories(gatekeeper
     PRIVATE
         ${PROJECT_SOURCE_DIR}/include
 )

@@ -1,19 +1,20 @@
 #pragma once
 
-namespace redismini{
+namespace gatekeeper
+{
 
-class Server{
-    public:
-        explicit Server(int port);
+class Server
+{
+  public:
+    explicit Server(int port);
+    void Run();
 
-        void Run();
+  private:
+    int port;
+    int server_fd;
 
-    private:
-        int port;
-        int server_fd;
-
-        void SetupSocket();
-        void AcceptSocket();
+    void SetupSocket();
+    void AcceptSocket();
 };
 
-}
+} // namespace gatekeeper
