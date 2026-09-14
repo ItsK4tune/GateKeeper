@@ -1,5 +1,11 @@
+# formatter file
+.cache/
+
+# build file
 bin/
 build/
 
+# log file
 out/
 log/
+
