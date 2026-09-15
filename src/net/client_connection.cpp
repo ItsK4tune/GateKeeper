@@ -1,5 +1,7 @@
 #include "gatekeeper/net/client_connection.h"
 
+#include "gatekeeper/command/command_dispatcher.h"
+
 #include "gatekeeper/protocol/frame.h"
 #include "gatekeeper/protocol/frame_decoder.h"
 #include "gatekeeper/protocol/json_request_parser.h"
@@ -39,6 +41,7 @@ void ClientConnection::Serve()
 {
     protocol::FrameDecoder decoder;
     protocol::JsonRequestParser parser;
+    command::CommandDispatcher dispatcher;
     std::array<std::uint8_t, 4096> buffer{};
     while (true)
     {
@@ -51,7 +54,11 @@ void ClientConnection::Serve()
         {
             protocol::Request request;
             if (!parser.Parse(payload, request, error)) { if (!SendError(request.id.c_str(), error.code.c_str(), error.message.c_str())) break; continue; }
-            if (!SendError(request.id.c_str(), "COMMAND_UNAVAILABLE", "command dispatch is not implemented yet")) break;
+            const auto result = dispatcher.Dispatch(request);
+            const auto response = result.ok ? protocol::EncodeSuccessResponse(request.id, result.result_json)
+                                            : protocol::EncodeErrorResponse(request.id, result.error);
+            const auto frame = protocol::EncodeFrame(response);
+            if (!SendAll(frame.data(), frame.size())) break;
         }
     }
     close(client_fd_);
