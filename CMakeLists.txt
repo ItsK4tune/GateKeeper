@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(gatekeeper
     src/main.cpp
+    src/protocol.cpp
     src/server.cpp
 )
 
@@ -20,3 +21,19 @@ target_include_directories(gatekeeper
     PRIVATE
         ${PROJECT_SOURCE_DIR}/include
 )
+
+include(CTest)
+
+if(BUILD_TESTING)
+    add_executable(protocol_tests
+        tests/protocol_test.cpp
+        src/protocol.cpp
+    )
+
+    target_include_directories(protocol_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/include
+    )
+
+    add_test(NAME protocol_tests COMMAND protocol_tests)
+endif()

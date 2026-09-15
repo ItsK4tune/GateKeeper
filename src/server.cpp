@@ -1,7 +1,9 @@
 #include "server.h"
+#include "protocol.h"
 
 #include <arpa/inet.h>
-#include <cstring>
+#include <array>
+#include <cerrno>
 #include <iostream>
 #include <netinet/in.h>
 #include <stdexcept>
@@ -10,6 +12,35 @@
 
 namespace gatekeeper
 {
+namespace
+{
+
+bool SendAll(int client_fd, const std::vector<std::uint8_t>& bytes)
+{
+    std::size_t sent = 0;
+    while (sent < bytes.size())
+    {
+        const ssize_t written = send(client_fd, bytes.data() + sent, bytes.size() - sent, 0);
+        if (written > 0)
+        {
+            sent += static_cast<std::size_t>(written);
+            continue;
+        }
+        if (written == -1 && errno == EINTR)
+        {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool SendError(int client_fd, const std::string& id, const protocol::ProtocolError& error)
+{
+    return SendAll(client_fd, protocol::EncodeFrame(protocol::EncodeError(id, error)));
+}
+
+} // namespace
 
 Server::Server(int port) : port(port), server_fd(-1) {}
 
@@ -70,22 +101,55 @@ void Server::AcceptSocket()
 
     std::cout << "Client connected\n";
 
-    char buffer[4096];
+    protocol::FrameDecoder decoder;
+    std::array<std::uint8_t, 4096> buffer{};
 
-    ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer));
-
-    if (bytes_read > 0)
+    while (true)
     {
-        std::cout << "Received " << bytes_read << " bytes\n";
+        const ssize_t bytes_read = recv(client_fd, buffer.data(), buffer.size(), 0);
+        if (bytes_read == 0)
+        {
+            break;
+        }
+        if (bytes_read == -1)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            std::cerr << "Client read failed\n";
+            break;
+        }
 
-        std::cout.write(buffer, bytes_read);
+        std::vector<std::string> frames;
+        protocol::ProtocolError frame_error;
+        if (!decoder.Push(std::span(buffer.data(), static_cast<std::size_t>(bytes_read)), frames, frame_error))
+        {
+            SendError(client_fd, "", frame_error);
+            break;
+        }
 
-        std::cout << '\n';
+        for (const auto& frame : frames)
+        {
+            protocol::Request request;
+            protocol::ProtocolError request_error;
+            if (!protocol::ParseRequest(frame, request, request_error))
+            {
+                if (!SendError(client_fd, request.id, request_error))
+                {
+                    break;
+                }
+                continue;
+            }
+
+            // Commands are introduced in Step 3. Step 2 only validates and frames GKWP requests.
+            const protocol::ProtocolError unavailable{"COMMAND_UNAVAILABLE", "command dispatch is not implemented yet"};
+            if (!SendError(client_fd, request.id, unavailable))
+            {
+                break;
+            }
+        }
     }
-
-    const char* response = "Server has received data!\r\n";
-
-    write(client_fd, response, std::strlen(response));
 
     close(client_fd);
 }
