@@ -13,8 +13,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(gatekeeper
     src/main.cpp
-    src/protocol.cpp
-    src/server.cpp
+    src/net/tcp_server.cpp
+    src/net/client_connection.cpp
+    src/protocol/frame.cpp
+    src/protocol/frame_decoder.cpp
+    src/protocol/json_request_parser.cpp
+    src/protocol/response.cpp
 )
 
 target_include_directories(gatekeeper
@@ -26,8 +30,13 @@ include(CTest)
 
 if(BUILD_TESTING)
     add_executable(protocol_tests
-        tests/protocol_test.cpp
-        src/protocol.cpp
+        tests/protocol/frame_decoder_test.cpp
+        tests/protocol/json_request_parser_test.cpp
+        tests/protocol/response_test.cpp
+        src/protocol/frame.cpp
+        src/protocol/frame_decoder.cpp
+        src/protocol/json_request_parser.cpp
+        src/protocol/response.cpp
     )
 
     target_include_directories(protocol_tests

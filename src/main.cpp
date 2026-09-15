@@ -1,4 +1,4 @@
-#include "server.h"
+#include "gatekeeper/net/tcp_server.h"
 
 #include <iostream>
 
@@ -6,7 +6,7 @@ int main()
 {
     try
     {
-        gatekeeper::Server server(63779);
+        gatekeeper::net::TcpServer server(63779);
         server.Run();
     }
     catch (const std::exception& e)
