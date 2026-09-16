@@ -1,67 +1,83 @@
 #include "gatekeeper/net/client_connection.h"
-
-#include "gatekeeper/command/command_dispatcher.h"
-
+#include "gatekeeper/net/network_error.h"
 #include "gatekeeper/protocol/frame.h"
 #include "gatekeeper/protocol/frame_decoder.h"
-#include "gatekeeper/protocol/json_request_parser.h"
 #include "gatekeeper/protocol/response.h"
 
 #include <array>
 #include <cerrno>
+#include <iostream>
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace gatekeeper::net
 {
 
-ClientConnection::ClientConnection(int client_fd) : client_fd_(client_fd) {}
+ClientConnection::ClientConnection(int client_fd, const RequestHandler& handler)
+    : client_fd_(client_fd), handler_(handler) {}
 
-bool ClientConnection::SendAll(const unsigned char* bytes, unsigned long size)
+ClientConnection::~ClientConnection()
 {
-    unsigned long sent = 0;
-    while (sent < size)
+    close(client_fd_);
+}
+
+bool ClientConnection::SendAll(std::span<const std::uint8_t> bytes)
+{
+    while (!bytes.empty())
     {
-        const auto written = send(client_fd_, bytes + sent, size - sent, 0);
-        if (written > 0) { sent += static_cast<unsigned long>(written); continue; }
-        if (written == -1 && errno == EINTR) continue;
+        const auto written = send(client_fd_, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+        if (written > 0)
+        {
+            bytes = bytes.subspan(static_cast<std::size_t>(written));
+            continue;
+        }
+        if (written == -1 && errno == EINTR)
+        {
+            continue;
+        }
+        const int error = written == 0 ? EPIPE : errno;
+        std::cerr << DescribeNetworkError("send to", "client fd=" + std::to_string(client_fd_), error) << '\n';
         return false;
     }
     return true;
 }
 
-bool ClientConnection::SendError(const char* id, const char* code, const char* message)
-{
-    const auto payload = protocol::EncodeErrorResponse(id, {code, message});
-    const auto frame = protocol::EncodeFrame(payload);
-    return SendAll(frame.data(), frame.size());
-}
-
 void ClientConnection::Serve()
 {
     protocol::FrameDecoder decoder;
-    protocol::JsonRequestParser parser;
-    command::CommandDispatcher dispatcher;
     std::array<std::uint8_t, 4096> buffer{};
     while (true)
     {
         const auto received = recv(client_fd_, buffer.data(), buffer.size(), 0);
-        if (received <= 0) break;
+        if (received == 0)
+        {
+            return;
+        }
+        if (received < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            const int error = errno;
+            std::cerr << DescribeNetworkError("read from", "client fd=" + std::to_string(client_fd_), error) << '\n';
+            return;
+        }
         std::vector<std::string> payloads;
         protocol::ProtocolError error;
-        if (!decoder.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), payloads, error)) { SendError("", error.code.c_str(), error.message.c_str()); break; }
+        if (!decoder.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), payloads, error))
+        {
+            SendAll(protocol::EncodeFrame(protocol::EncodeErrorResponse("", error)));
+            return;
+        }
         for (const auto& payload : payloads)
         {
-            protocol::Request request;
-            if (!parser.Parse(payload, request, error)) { if (!SendError(request.id.c_str(), error.code.c_str(), error.message.c_str())) break; continue; }
-            const auto result = dispatcher.Dispatch(request);
-            const auto response = result.ok ? protocol::EncodeSuccessResponse(request.id, result.result_json)
-                                            : protocol::EncodeErrorResponse(request.id, result.error);
-            const auto frame = protocol::EncodeFrame(response);
-            if (!SendAll(frame.data(), frame.size())) break;
+            if (!SendAll(protocol::EncodeFrame(handler_(payload))))
+            {
+                return;
+            }
         }
     }
-    close(client_fd_);
 }
 
 }

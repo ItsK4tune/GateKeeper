@@ -101,6 +101,35 @@ void TestApplicationModes()
     Require(application.RunCommand("pInG", output) == 0 && requests == previous + 1, "one-line ping failed");
 }
 
+void TestSuggestions()
+{
+    int requests = 0;
+    gatekeeper::cli::CommandRegistry registry([&](const std::string&) {
+        ++requests;
+        return std::string("PONG");
+    });
+    for (const auto& typo : {"pin", "pniG", "pingg", "pimg"})
+    {
+        const auto result = registry.Execute(typo);
+        Require(result.exit_code != 0 && !result.exit_requested, "typo executed");
+        Require(result.output.find("Did you mean: PING?") != std::string::npos, "missing PING suggestion");
+    }
+    Require(registry.Execute("hlep").output.find("Did you mean: HELP?") != std::string::npos, "missing HELP suggestion");
+    Require(registry.Execute("xxxxxxxxxxxxxxxx").output.find("Did you mean") == std::string::npos, "unrelated suggestion");
+    Require(registry.Execute(std::string(10000, 'x')).exit_code != 0, "long unknown operation accepted");
+    registry.Register("PONG", "Test extension", [](const auto&) { return gatekeeper::cli::CommandResult{}; });
+    registry.Register("PANG", "Test extension", [](const auto&) { return gatekeeper::cli::CommandResult{}; });
+    registry.Register("PUNG", "Test extension", [](const auto&) { return gatekeeper::cli::CommandResult{}; });
+    const auto result = registry.Execute("peng");
+    Require(result.output.find("Did you mean: PANG, PING, PONG?") != std::string::npos, "suggestion ranking or limit failed");
+    Require(requests == 0, "suggestions executed remote commands");
+    gatekeeper::cli::Application application(registry);
+    std::istringstream input("pin\nhelp\nquit\n");
+    std::ostringstream output;
+    Require(application.RunRepl(input, output) == 0, "REPL did not recover from typo");
+    Require(output.str().find("Show available commands") != std::string::npos, "HELP after typo did not run");
+}
+
 }
 
 int main()
@@ -109,6 +138,7 @@ int main()
     {
         TestCommandsAndExtension();
         TestApplicationModes();
+        TestSuggestions();
         std::cout << "CLI registry and application tests passed\n";
     }
     catch (const std::exception& error)

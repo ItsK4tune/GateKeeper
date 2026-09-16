@@ -1,7 +1,6 @@
 #pragma once
 
-#include <algorithm>
-#include <cctype>
+#include "gatekeeper/command/name.h"
 #include <string>
 
 namespace gatekeeper::cli
@@ -9,10 +8,7 @@ namespace gatekeeper::cli
 
 inline std::string NormalizeCommand(std::string command)
 {
-    std::transform(command.begin(), command.end(), command.begin(), [](unsigned char character) {
-        return static_cast<char>(std::toupper(character));
-    });
-    return command;
+    return gatekeeper::command::NormalizeName(command);
 }
 
 }

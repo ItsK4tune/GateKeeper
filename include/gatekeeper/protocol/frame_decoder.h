@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gatekeeper/protocol/request.h"
+#include "gatekeeper/protocol/error.h"
 
 #include <cstdint>
 #include <span>

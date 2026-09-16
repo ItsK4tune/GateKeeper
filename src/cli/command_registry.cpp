@@ -1,6 +1,7 @@
 #include "gatekeeper/cli/command_registry.h"
 
 #include "gatekeeper/cli/command.h"
+#include "gatekeeper/cli/command_suggestions.h"
 
 #include <sstream>
 #include <stdexcept>
@@ -65,7 +66,24 @@ CommandResult CommandRegistry::Execute(std::string_view input) const
     const auto entry = commands_.find(name);
     if (entry == commands_.end())
     {
-        return {"UNKNOWN_COMMAND: unsupported command: " + name, false, 1};
+        std::vector<std::string> names;
+        for (const auto& [registered_name, registered_entry] : commands_)
+        {
+            names.push_back(registered_name);
+        }
+        const auto suggestions = SuggestCommands(name, names);
+        std::string message = "UNKNOWN_COMMAND: unsupported command: " + name;
+        if (!suggestions.empty())
+        {
+            message += "\nDid you mean: ";
+            for (std::size_t i = 0; i < suggestions.size(); ++i)
+            {
+                message += (i == 0 ? "" : ", ") + suggestions[i];
+            }
+            message += '?';
+        }
+        message += "\nType HELP to list available commands.";
+        return {std::move(message), false, 1};
     }
     Arguments arguments;
     for (std::string argument; stream >> argument;)
