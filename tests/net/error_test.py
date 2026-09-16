@@ -73,10 +73,8 @@ with socket.socket() as reserved:
     reserved.bind(("127.0.0.1", 0))
     port = reserved.getsockname()[1]
     run_error([gate, "-p", str(port), "PING"], ["CONNECTION_REFUSED", str(port), "gatekeeper is running"])
-    result = subprocess.run([gate, "-p", str(port)], input="PING\nhelp\nquit\n", text=True,
-                            capture_output=True, timeout=10)
-    require(result.returncode == 0 and "CONNECTION_REFUSED" in result.stdout and
-            "Show available commands" in result.stdout, "REPL did not recover from connection failure")
+    output = run_error([gate, "-p", str(port)], ["CONNECTION_REFUSED", str(port), "gatekeeper is running"])
+    require("gate> " not in output, "REPL displayed a prompt before reporting an unavailable server")
 
 run_error([gate, "-h", "bad host!", "PING"], ["DNS_ERROR", "bad host!"])
 run_error([gate, "-h", "", "PING"], ["INVALID_HOST"])

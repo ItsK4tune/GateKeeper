@@ -3,11 +3,15 @@
 #include <istream>
 #include <ostream>
 #include <string>
+#include <utility>
 
 namespace gatekeeper::cli
 {
 
-Application::Application(const CommandRegistry& commands) : commands_(commands) {}
+Application::Application(const CommandRegistry& commands, SessionStarter session_starter)
+    : commands_(commands), session_starter_(std::move(session_starter))
+{
+}
 
 int Application::RunCommand(std::string_view command, std::ostream& output) const
 {
@@ -21,6 +25,7 @@ int Application::RunCommand(std::string_view command, std::ostream& output) cons
 
 int Application::RunRepl(std::istream& input, std::ostream& output) const
 {
+    session_starter_();
     std::string command;
     while (output << "gate> " << std::flush, std::getline(input, command))
     {

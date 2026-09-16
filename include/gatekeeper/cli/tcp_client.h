@@ -14,10 +14,10 @@ public:
     ~TcpClient();
     TcpClient(const TcpClient&) = delete;
     TcpClient& operator=(const TcpClient&) = delete;
+    void Open();
     std::string Execute(const std::string& operation);
 
 private:
-    void Connect();
     void Close();
     void ReadAll(std::span<std::uint8_t> bytes);
     void SendAll(std::span<const std::uint8_t> bytes);

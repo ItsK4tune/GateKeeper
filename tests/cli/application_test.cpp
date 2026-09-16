@@ -75,11 +75,12 @@ void TestCommandsAndExtension()
 void TestApplicationModes()
 {
     int requests = 0;
+    int sessions = 0;
     gatekeeper::cli::CommandRegistry registry([&](const std::string&) {
         ++requests;
         return std::string("PONG");
     });
-    gatekeeper::cli::Application application(registry);
+    gatekeeper::cli::Application application(registry, [&sessions]() { ++sessions; });
     for (const auto& word : {"QUIT", "EXIT"})
     {
         for (const auto& variant : Variants(word))
@@ -87,18 +88,42 @@ void TestApplicationModes()
             std::istringstream input("hElP\npInG\n" + variant + "\nPING\n");
             std::ostringstream output;
             const auto previous = requests;
+            const auto previous_sessions = sessions;
             Require(application.RunRepl(input, output) == 0, "REPL failed");
             Require(requests == previous + 1, "REPL sent quit or read after exit");
+            Require(sessions == previous_sessions + 1, "REPL did not open a session");
             output.str("");
             Require(application.RunCommand(variant, output) == 0, "one-line exit failed");
-            Require(output.str().empty() && requests == previous + 1, "one-line exit sent request");
+            Require(output.str().empty() && requests == previous + 1 && sessions == previous_sessions + 1,
+                    "one-line exit opened a session");
         }
     }
     std::istringstream input(" \t\n");
     std::ostringstream output;
     const auto previous = requests;
-    Require(application.RunRepl(input, output) == 0 && requests == previous, "blank input or EOF sent request");
+    const auto previous_sessions = sessions;
+    Require(application.RunRepl(input, output) == 0 && requests == previous && sessions == previous_sessions + 1,
+            "blank input or EOF did not open a session");
     Require(application.RunCommand("pInG", output) == 0 && requests == previous + 1, "one-line ping failed");
+}
+
+void TestReplOpensSessionBeforePrompt()
+{
+    gatekeeper::cli::CommandRegistry registry([](const std::string&) { return std::string("PONG"); });
+    gatekeeper::cli::Application application(registry, []() { throw std::runtime_error("CONNECTION_REFUSED"); });
+    std::istringstream input("HELP\n");
+    std::ostringstream output;
+
+    try
+    {
+        application.RunRepl(input, output);
+        throw std::runtime_error("REPL accepted an unavailable server");
+    }
+    catch (const std::runtime_error& error)
+    {
+        Require(std::string(error.what()) == "CONNECTION_REFUSED", "REPL returned the wrong connection error");
+    }
+    Require(output.str().empty(), "REPL displayed a prompt before opening the session");
 }
 
 void TestSuggestions()
@@ -123,7 +148,7 @@ void TestSuggestions()
     const auto result = registry.Execute("peng");
     Require(result.output.find("Did you mean: PANG, PING, PONG?") != std::string::npos, "suggestion ranking or limit failed");
     Require(requests == 0, "suggestions executed remote commands");
-    gatekeeper::cli::Application application(registry);
+    gatekeeper::cli::Application application(registry, []() {});
     std::istringstream input("pin\nhelp\nquit\n");
     std::ostringstream output;
     Require(application.RunRepl(input, output) == 0, "REPL did not recover from typo");
@@ -138,6 +163,7 @@ int main()
     {
         TestCommandsAndExtension();
         TestApplicationModes();
+        TestReplOpensSessionBeforePrompt();
         TestSuggestions();
         std::cout << "CLI registry and application tests passed\n";
     }

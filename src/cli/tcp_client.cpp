@@ -98,7 +98,7 @@ void TcpClient::Close()
     }
 }
 
-void TcpClient::Connect()
+void TcpClient::Open()
 {
     if (socket_fd_ != -1)
     {
@@ -192,7 +192,7 @@ std::string TcpClient::Execute(const std::string& operation)
     {
         throw std::invalid_argument("invalid operation name");
     }
-    Connect();
+    Open();
     try
     {
         const auto payload = "{\"id\":\"gate-" + std::to_string(next_id_++) +

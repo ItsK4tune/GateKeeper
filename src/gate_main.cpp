@@ -18,7 +18,7 @@ int main(int argc, char* argv[])
         gatekeeper::cli::CommandRegistry commands([&client](const std::string& operation) {
             return client.Execute(operation);
         });
-        gatekeeper::cli::Application application(commands);
+        gatekeeper::cli::Application application(commands, [&client]() { client.Open(); });
         return options.command ? application.RunCommand(*options.command, std::cout)
                                : application.RunRepl(std::cin, std::cout);
     }
