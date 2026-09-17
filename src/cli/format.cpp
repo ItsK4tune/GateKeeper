@@ -1,9 +1,11 @@
-﻿#include "gatekeeper/cli/format.h"
+#include "gatekeeper/cli/format.h"
 #include "gatekeeper/protocol/response.h"
 
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace gatekeeper::cli
 {
@@ -74,6 +76,59 @@ bool ParseBool(std::string_view value, std::size_t& pos, bool& out)
     return false;
 }
 
+bool ParseNumber(std::string_view value, std::size_t& pos, std::uint64_t& out)
+{
+    SkipWs(value, pos);
+    if (pos >= value.size() || !std::isdigit(static_cast<unsigned char>(value[pos])))
+    {
+        return false;
+    }
+    out = 0;
+    while (pos < value.size() && std::isdigit(static_cast<unsigned char>(value[pos])))
+    {
+        out = out * 10 + (value[pos++] - '0');
+    }
+    return true;
+}
+
+bool ParseStringList(std::string_view value, std::size_t& pos, std::vector<std::string>& out)
+{
+    SkipWs(value, pos);
+    if (pos >= value.size() || value[pos++] != '[')
+    {
+        return false;
+    }
+    out.clear();
+    SkipWs(value, pos);
+    if (pos < value.size() && value[pos] == ']')
+    {
+        ++pos;
+        return true;
+    }
+    while (pos < value.size())
+    {
+        std::string s;
+        if (!ParseJsonString(value, pos, s))
+        {
+            return false;
+        }
+        out.push_back(std::move(s));
+        SkipWs(value, pos);
+        if (pos < value.size() && value[pos] == ']')
+        {
+            ++pos;
+            return true;
+        }
+        if (pos < value.size() && value[pos] == ',')
+        {
+            ++pos;
+            continue;
+        }
+        return false;
+    }
+    return false;
+}
+
 }
 
 Result FormatResponse(std::string_view gkwp_json)
@@ -82,19 +137,16 @@ Result FormatResponse(std::string_view gkwp_json)
     {
         return {};
     }
-    // If it is not JSON (e.g. mock test returning "PONG"), return directly as success
     if (gkwp_json.front() != '{')
     {
         return Result{std::string(gkwp_json)};
     }
 
-    // Parse simple GKWP fields: ok, result, error
     bool has_ok = false;
     bool ok_value = false;
     std::string error_message;
     std::string error_code;
 
-    // Check if ok: true or false
     auto ok_pos = gkwp_json.find("\"ok\":");
     if (ok_pos != std::string_view::npos)
     {
@@ -112,7 +164,6 @@ Result FormatResponse(std::string_view gkwp_json)
 
     if (!ok_value)
     {
-        // Parse error message and code
         auto msg_pos = gkwp_json.find("\"message\":");
         if (msg_pos != std::string_view::npos)
         {
@@ -138,15 +189,12 @@ Result FormatResponse(std::string_view gkwp_json)
         return Result{std::move(err_text), false, 1};
     }
 
-    // Success response: parse result object
-    // 1. PING -> {"pong": true}
     if (gkwp_json.find("\"pong\":true") != std::string_view::npos ||
         gkwp_json.find("\"pong\": true") != std::string_view::npos)
     {
         return Result{"PONG"};
     }
 
-    // 2. SET -> {"stored": true} or {"stored": false}
     if (gkwp_json.find("\"stored\":true") != std::string_view::npos ||
         gkwp_json.find("\"stored\": true") != std::string_view::npos)
     {
@@ -158,7 +206,6 @@ Result FormatResponse(std::string_view gkwp_json)
         return Result{"(nil)"};
     }
 
-    // 3. GET -> {"value": "..."}
     auto val_pos = gkwp_json.find("\"value\":");
     if (val_pos != std::string_view::npos)
     {
@@ -170,9 +217,86 @@ Result FormatResponse(std::string_view gkwp_json)
         }
     }
 
-    // Fallback: if unrecognized result format, return raw JSON
+    for (const char* int_field : {"\"deleted\":", "\"count\":", "\"size\":"})
+    {
+        auto pos = gkwp_json.find(int_field);
+        if (pos != std::string_view::npos)
+        {
+            pos += std::string_view(int_field).size();
+            std::uint64_t n = 0;
+            if (ParseNumber(gkwp_json, pos, n))
+            {
+                return Result{"(integer) " + std::to_string(n)};
+            }
+        }
+    }
+
+    auto type_pos = gkwp_json.find("\"type\":");
+    if (type_pos != std::string_view::npos)
+    {
+        type_pos += 7;
+        std::string type_val;
+        if (ParseJsonString(gkwp_json, type_pos, type_val))
+        {
+            return Result{type_val};
+        }
+    }
+
+    auto scan_pos = gkwp_json.find("\"cursor\":");
+    if (scan_pos != std::string_view::npos)
+    {
+        scan_pos += 9;
+        std::uint64_t next_cursor = 0;
+        if (ParseNumber(gkwp_json, scan_pos, next_cursor))
+        {
+            auto keys_pos = gkwp_json.find("\"keys\":");
+            if (keys_pos != std::string_view::npos)
+            {
+                keys_pos += 7;
+                std::vector<std::string> keys;
+                if (ParseStringList(gkwp_json, keys_pos, keys))
+                {
+                    std::string out = "1) \"" + std::to_string(next_cursor) + "\"\n2) ";
+                    if (keys.empty())
+                    {
+                        out += "(empty list or set)";
+                    }
+                    else
+                    {
+                        for (std::size_t i = 0; i < keys.size(); ++i)
+                        {
+                            if (i > 0) out += "\n   ";
+                            out += std::to_string(i + 1) + ") " + protocol::QuoteJson(keys[i]);
+                        }
+                    }
+                    return Result{std::move(out)};
+                }
+            }
+        }
+    }
+
+    auto keys_pos = gkwp_json.find("\"keys\":");
+    if (keys_pos != std::string_view::npos)
+    {
+        keys_pos += 7;
+        std::vector<std::string> keys;
+        if (ParseStringList(gkwp_json, keys_pos, keys))
+        {
+            if (keys.empty())
+            {
+                return Result{"(empty list or set)"};
+            }
+            std::string out;
+            for (std::size_t i = 0; i < keys.size(); ++i)
+            {
+                if (i > 0) out += '\n';
+                out += std::to_string(i + 1) + ") " + protocol::QuoteJson(keys[i]);
+            }
+            return Result{std::move(out)};
+        }
+    }
+
     return Result{std::string(gkwp_json)};
 }
 
 }
-

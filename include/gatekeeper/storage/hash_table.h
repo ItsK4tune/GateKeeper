@@ -241,6 +241,25 @@ public:
         return max_load_factor_;
     }
 
+    std::pair<std::size_t, std::vector<Key>> Scan(std::size_t cursor, std::size_t count) const
+    {
+        std::vector<Key> result;
+        if (buckets_.empty())
+        {
+            return {0, result};
+        }
+        std::size_t i = cursor >= buckets_.size() ? 0 : cursor;
+        while (i < buckets_.size() && result.size() < count)
+        {
+            for (const auto* curr = buckets_[i]; curr != nullptr; curr = curr->next)
+            {
+                result.push_back(curr->key);
+            }
+            ++i;
+        }
+        return {i >= buckets_.size() ? 0 : i, result};
+    }
+
     template <typename Fn>
     void ForEach(Fn&& fn)
     {

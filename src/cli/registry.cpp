@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/cli/registry.h"
+#include "gatekeeper/cli/registry.h"
 #include "gatekeeper/cli/format.h"
 #include "gatekeeper/cli/command.h"
 #include "gatekeeper/cli/suggest.h"
@@ -58,6 +58,44 @@ Registry::Registry(RequestExecutor execute_remote)
             else return Result{"INVALID_ARGUMENTS: expected NX or XX", false, 1};
         }
         return FormatResponse(execute_remote("SET", body + "}"));
+    });
+    Register("DEL", "DEL key [key ...]", [execute_remote](const Arguments& args) {
+        if (args.empty()) return Result{"INVALID_ARGUMENTS: DEL key [key ...]", false, 1};
+        std::string body = "{\"keys\":[";
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            if (i > 0) body += ",";
+            body += protocol::QuoteJson(args[i]);
+        }
+        body += "]}";
+        return FormatResponse(execute_remote("DEL", body));
+    });
+    Register("EXISTS", "EXISTS key [key ...]", [execute_remote](const Arguments& args) {
+        if (args.empty()) return Result{"INVALID_ARGUMENTS: EXISTS key [key ...]", false, 1};
+        std::string body = "{\"keys\":[";
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            if (i > 0) body += ",";
+            body += protocol::QuoteJson(args[i]);
+        }
+        body += "]}";
+        return FormatResponse(execute_remote("EXISTS", body));
+    });
+    Register("TYPE", "TYPE key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty()) return Result{"INVALID_ARGUMENTS: TYPE key", false, 1};
+        return FormatResponse(execute_remote("TYPE", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
+    });
+    Register("DBSIZE", "DBSIZE", WithoutArguments([execute_remote](const Arguments&) {
+        return FormatResponse(execute_remote("DBSIZE", "{}"));
+    }));
+    Register("KEYS", "KEYS [pattern]", [execute_remote](const Arguments& args) {
+        if (args.size() > 1) return Result{"INVALID_ARGUMENTS: KEYS [pattern]", false, 1};
+        std::string pattern = args.empty() ? "*" : args[0];
+        return FormatResponse(execute_remote("KEYS", "{\"pattern\":" + protocol::QuoteJson(pattern) + "}"));
+    });
+    Register("SCAN", "SCAN [cursor] [count]", [execute_remote](const Arguments& args) {
+        if (args.size() > 2) return Result{"INVALID_ARGUMENTS: SCAN [cursor] [count]", false, 1};
+        std::string cursor = args.empty() ? "0" : args[0];
+        std::string count = args.size() > 1 ? args[1] : "10";
+        return FormatResponse(execute_remote("SCAN", "{\"cursor\":" + cursor + ",\"count\":" + count + "}"));
     });
     Register("HELP", "Show available commands", WithoutArguments([this](const Arguments&) {
         std::string output;

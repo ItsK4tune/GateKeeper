@@ -43,6 +43,7 @@ gatekeeper_library(gk_commands
     src/command/dispatcher.cpp
     src/command/string_ops.cpp
     src/command/string_body.cpp
+    src/command/key_ops.cpp
 )
 target_link_libraries(gk_commands PUBLIC gk_protocol gk_command_names gk_storage)
 
@@ -85,6 +86,10 @@ if(BUILD_TESTING)
     add_executable(hash_table_tests tests/storage/hash_table_test.cpp)
     target_link_libraries(hash_table_tests PRIVATE gk_storage)
     add_test(NAME hash_table_tests COMMAND hash_table_tests)
+
+    add_executable(key_commands_tests tests/command/key_commands_test.cpp)
+    target_link_libraries(key_commands_tests PRIVATE gk_commands)
+    add_test(NAME key_commands_tests COMMAND key_commands_tests)
 
     add_executable(options_tests tests/options_test.cpp)
     target_link_libraries(options_tests PRIVATE gk_config)

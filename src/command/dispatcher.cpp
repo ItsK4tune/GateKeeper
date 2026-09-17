@@ -1,4 +1,5 @@
-﻿#include "gatekeeper/command/dispatcher.h"
+#include "gatekeeper/command/dispatcher.h"
+#include "gatekeeper/command/key_ops.h"
 #include "gatekeeper/command/name.h"
 #include "gatekeeper/command/string_ops.h"
 #include "gatekeeper/storage/memory_store.h"
@@ -25,6 +26,7 @@ Dispatcher::Dispatcher(std::unique_ptr<storage::Store> store)
         return Result{true, R"({"pong":true})", {}};
     });
     RegisterStringOps(*this, *store_);
+    RegisterKeyOps(*this, *store_);
 }
 
 Dispatcher::~Dispatcher() = default;
