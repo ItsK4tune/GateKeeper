@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/cli/command.h"
 
@@ -32,6 +32,8 @@ private:
         std::string description;
         Handler handler;
     };
+
+    std::string BuildHelpOutput() const;
 
     std::map<std::string, Entry> commands_;
 };

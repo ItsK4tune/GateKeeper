@@ -9,6 +9,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <utility>
+#include <set>
 
 namespace gatekeeper::cli
 {
@@ -26,6 +27,86 @@ Registry::Handler WithoutArguments(Registry::Handler handler)
     };
 }
 
+}
+
+std::string Registry::BuildHelpOutput() const
+{
+    struct Group
+    {
+        std::string title;
+        std::vector<std::pair<std::string, std::string>> items;
+    };
+
+    std::vector<Group> groups = {
+        {"Server & Session", {
+            {"PING", "Check server availability"},
+            {"HELP", "Show available commands"},
+            {"QUIT", "Close the CLI"},
+            {"EXIT", "Alias for QUIT"}
+        }},
+        {"String Operations", {
+            {"GET", "GET key"},
+            {"SET", "SET key value [NX|XX] [EX seconds|PX milliseconds]"}
+        }},
+        {"Key Management", {
+            {"DEL", "DEL key [key ...]"},
+            {"EXISTS", "EXISTS key [key ...]"},
+            {"TYPE", "TYPE key"},
+            {"DBSIZE", "Return total count of keys in database"},
+            {"KEYS", "KEYS [pattern]"},
+            {"SCAN", "SCAN [cursor] [count]"}
+        }},
+        {"Expiration & TTL", {
+            {"EXPIRE", "EXPIRE key seconds"},
+            {"PEXPIRE", "PEXPIRE key milliseconds"},
+            {"TTL", "TTL key"},
+            {"PTTL", "PTTL key"},
+            {"PERSIST", "PERSIST key"}
+        }}
+    };
+
+    std::set<std::string> recognized;
+    for (const auto& g : groups)
+    {
+        for (const auto& [name, _] : g.items)
+        {
+            recognized.insert(name);
+        }
+    }
+
+    std::vector<std::pair<std::string, std::string>> custom_items;
+    for (const auto& [name, entry] : commands_)
+    {
+        if (!recognized.contains(name))
+        {
+            custom_items.push_back({name, entry.description});
+        }
+    }
+    if (!custom_items.empty())
+    {
+        groups.push_back({"Extensions", std::move(custom_items)});
+    }
+
+    std::ostringstream out;
+    for (std::size_t g = 0; g < groups.size(); ++g)
+    {
+        if (g > 0)
+        {
+            out << '\n';
+        }
+        out << "[" << groups[g].title << "]\n";
+        for (const auto& [name, desc] : groups[g].items)
+        {
+            out << "  " << name << " - " << desc << '\n';
+        }
+    }
+
+    std::string res = out.str();
+    if (!res.empty() && res.back() == '\n')
+    {
+        res.pop_back();
+    }
+    return res;
 }
 
 Registry::Registry(RemoteExecutor execute_remote)
@@ -145,13 +226,7 @@ Registry::Registry(RequestExecutor execute_remote)
         return FormatResponse(execute_remote("PERSIST", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
     });
     Register("HELP", "Show available commands", WithoutArguments([this](const Arguments&) {
-        std::string output;
-        for (const auto& [name, entry] : commands_)
-        {
-            output += name + " - " + entry.description + '\n';
-        }
-        output.pop_back();
-        return Result{output};
+        return Result{BuildHelpOutput()};
     }));
     const Handler quit = WithoutArguments([](const Arguments&) { return Result{{}, true}; });
     Register("QUIT", "Close the CLI", quit);
