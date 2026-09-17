@@ -91,6 +91,10 @@ if(BUILD_TESTING)
     target_link_libraries(key_commands_tests PRIVATE gk_commands)
     add_test(NAME key_commands_tests COMMAND key_commands_tests)
 
+    add_executable(concurrent_clients_tests tests/net/concurrent_clients_test.cpp)
+    target_link_libraries(concurrent_clients_tests PRIVATE gk_net gk_storage)
+    add_test(NAME concurrent_clients_tests COMMAND concurrent_clients_tests)
+
     add_executable(options_tests tests/options_test.cpp)
     target_link_libraries(options_tests PRIVATE gk_config)
     add_test(NAME options_tests COMMAND options_tests)

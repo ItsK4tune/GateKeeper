@@ -1,8 +1,9 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/request_handler.h"
 
+#include <cstdint>
 #include <memory>
 
 namespace gatekeeper::net
@@ -24,6 +25,7 @@ private:
     int server_fd_;
     RequestHandler handler_;
     std::shared_ptr<log::Logger> logger_;
+    std::uint64_t next_session_id_{1};
 
     void SetupSocket();
     void AcceptConnection();

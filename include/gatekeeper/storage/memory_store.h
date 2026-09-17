@@ -5,8 +5,8 @@
 #include "gatekeeper/storage/store.h"
 
 #include <cstddef>
-#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,7 +29,7 @@ public:
     std::pair<std::size_t, std::vector<std::string>> Scan(std::size_t cursor, std::size_t count) const override;
 
 private:
-    mutable std::mutex mutex_;
+    mutable std::shared_mutex mutex_;
     HashTable<std::string, Entry> entries_;
 };
 

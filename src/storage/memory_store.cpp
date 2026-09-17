@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <mutex>
+#include <shared_mutex>
 #include <utility>
 
 namespace gatekeeper::storage
@@ -64,7 +65,7 @@ bool MatchPattern(std::string_view pattern, std::string_view str)
 
 bool MemoryStore::Set(std::string key, std::string value, WriteCondition condition)
 {
-    const std::lock_guard lock(mutex_);
+    const std::unique_lock lock(mutex_);
     auto* existing = entries_.Find(key);
     if (condition == WriteCondition::IfAbsent && existing != nullptr)
     {
@@ -89,7 +90,7 @@ bool MemoryStore::Set(std::string key, std::string value, WriteCondition conditi
 
 std::optional<std::string> MemoryStore::Get(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    const std::shared_lock lock(mutex_);
     const auto* existing = entries_.Find(std::string(key));
     if (existing == nullptr)
     {
@@ -100,19 +101,19 @@ std::optional<std::string> MemoryStore::Get(std::string_view key) const
 
 bool MemoryStore::Del(std::string_view key)
 {
-    const std::lock_guard lock(mutex_);
+    const std::unique_lock lock(mutex_);
     return entries_.Erase(std::string(key));
 }
 
 bool MemoryStore::Exists(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    const std::shared_lock lock(mutex_);
     return entries_.Find(std::string(key)) != nullptr;
 }
 
 DataType MemoryStore::Type(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    const std::shared_lock lock(mutex_);
     const auto* existing = entries_.Find(std::string(key));
     if (existing == nullptr)
     {
@@ -123,13 +124,13 @@ DataType MemoryStore::Type(std::string_view key) const
 
 std::size_t MemoryStore::DbSize() const
 {
-    const std::lock_guard lock(mutex_);
+    const std::shared_lock lock(mutex_);
     return entries_.Size();
 }
 
 std::vector<std::string> MemoryStore::Keys(std::string_view pattern) const
 {
-    const std::lock_guard lock(mutex_);
+    const std::shared_lock lock(mutex_);
     std::vector<std::string> matched;
     entries_.ForEach([&](const std::string& key, const Entry&) {
         if (MatchPattern(pattern, key))
@@ -142,7 +143,7 @@ std::vector<std::string> MemoryStore::Keys(std::string_view pattern) const
 
 std::pair<std::size_t, std::vector<std::string>> MemoryStore::Scan(std::size_t cursor, std::size_t count) const
 {
-    const std::lock_guard lock(mutex_);
+    const std::shared_lock lock(mutex_);
     return entries_.Scan(cursor, count);
 }
 

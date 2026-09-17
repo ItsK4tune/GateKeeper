@@ -102,7 +102,8 @@ void Server::AcceptConnection()
     logger_->Info("Accepted connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
     try
     {
-        Connection(client_fd, handler_, logger_).Serve();
+        const auto session_id = next_session_id_++;
+    Connection(client_fd, handler_, logger_, session_id, client_info).Serve();
     }
     catch (const std::exception& error)
     {
