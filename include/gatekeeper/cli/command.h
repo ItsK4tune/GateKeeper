@@ -6,12 +6,14 @@
 namespace gatekeeper::cli
 {
 
-struct CommandResult
+struct Result
 {
     std::string output;
     bool exit_requested = false;
     int exit_code = 0;
 };
+
+using CommandResult = Result;
 
 inline std::string NormalizeCommand(std::string command)
 {

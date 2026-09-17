@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "gatekeeper/command/dispatch_result.h"
+#include "gatekeeper/command/result.h"
 #include "gatekeeper/protocol/request.h"
 #include "gatekeeper/storage/store.h"
 
@@ -15,7 +15,7 @@ namespace gatekeeper::command
 class Dispatcher
 {
 public:
-    using Handler = std::function<DispatchResult(const protocol::Request&)>;
+    using Handler = std::function<Result(const protocol::Request&)>;
 
     Dispatcher();
     explicit Dispatcher(std::unique_ptr<storage::Store> store);
@@ -25,7 +25,7 @@ public:
     Dispatcher& operator=(const Dispatcher&) = delete;
 
     void Register(std::string name, Handler handler);
-    DispatchResult Dispatch(const protocol::Request& request) const;
+    Result Dispatch(const protocol::Request& request) const;
 
 private:
     std::unique_ptr<storage::Store> store_;

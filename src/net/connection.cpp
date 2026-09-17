@@ -64,7 +64,7 @@ void Connection::Serve()
             return;
         }
         std::vector<std::string> payloads;
-        protocol::ProtocolError error;
+        protocol::Error error;
         if (!decoder.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), payloads, error))
         {
             SendAll(protocol::EncodeFrame(protocol::EncodeErrorResponse("", error)));

@@ -1,17 +1,2 @@
-#pragma once
-
-#include "gatekeeper/protocol/error.h"
-
-#include <string>
-
-namespace gatekeeper::command
-{
-
-struct DispatchResult
-{
-    bool ok;
-    std::string result_json;
-    protocol::ProtocolError error;
-};
-
-}
+﻿#pragma once
+#include "gatekeeper/command/result.h"

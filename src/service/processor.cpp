@@ -19,7 +19,7 @@ Processor::Processor(Dispatch dispatch) : dispatch_(std::move(dispatch))
 std::string Processor::Process(std::string_view payload) const
 {
     protocol::Request request;
-    protocol::ProtocolError error;
+    protocol::Error error;
     const protocol::Parser parser;
     if (!parser.Parse(payload, request, error))
     {

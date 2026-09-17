@@ -27,7 +27,7 @@ bool Flag(const StringBody& body, const char* field)
     return std::get<bool>(it->second);
 }
 
-DispatchResult Set(const protocol::Request& request, storage::Store& store)
+Result Set(const protocol::Request& request, storage::Store& store)
 {
     const auto body = ParseStringBody(request.body_json);
     for (const auto& [name, value] : body)
@@ -43,7 +43,7 @@ DispatchResult Set(const protocol::Request& request, storage::Store& store)
     return {true, store.Set(key, value, condition) ? R"({"stored":true})" : R"({"stored":false})", {}};
 }
 
-DispatchResult Get(const protocol::Request& request, storage::Store& store)
+Result Get(const protocol::Request& request, storage::Store& store)
 {
     const auto body = ParseStringBody(request.body_json);
     const auto& key = RequiredString(body, "key");
@@ -53,13 +53,13 @@ DispatchResult Get(const protocol::Request& request, storage::Store& store)
     return {true, "{\"value\":" + protocol::QuoteJson(*value) + "}", {}};
 }
 
-auto Validated(DispatchResult (*handler)(const protocol::Request&, storage::Store&),
+auto Validated(Result (*handler)(const protocol::Request&, storage::Store&),
                storage::Store& store)
 {
     return [handler, &store](const protocol::Request& request) {
         try { return handler(request, store); }
         catch (const std::invalid_argument& error) {
-            return DispatchResult{false, {}, {"INVALID_ARGUMENTS", error.what()}};
+            return Result{false, {}, {"INVALID_ARGUMENTS", error.what()}};
         }
     };
 }

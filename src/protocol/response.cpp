@@ -39,7 +39,7 @@ std::string EncodeSuccessResponse(const std::string& id, const std::string& resu
     return "{\"id\":" + QuoteJson(id) + ",\"ok\":true,\"result\":" + result_json + "}";
 }
 
-std::string EncodeErrorResponse(const std::string& id, const ProtocolError& error)
+std::string EncodeErrorResponse(const std::string& id, const Error& error)
 {
     return "{\"id\":" + QuoteJson(id) + ",\"ok\":false,\"error\":{\"code\":" +
            QuoteJson(error.code) + ",\"message\":" + QuoteJson(error.message) + "}}";

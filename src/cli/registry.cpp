@@ -19,7 +19,7 @@ Registry::Handler WithoutArguments(Registry::Handler handler)
     return [handler](const Registry::Arguments& arguments) {
         if (!arguments.empty())
         {
-            return CommandResult{"INVALID_ARGUMENTS: command takes no arguments", false, 1};
+            return Result{"INVALID_ARGUMENTS: command takes no arguments", false, 1};
         }
         return handler(arguments);
     };
@@ -38,25 +38,25 @@ Registry::Registry(RemoteExecutor execute_remote)
 Registry::Registry(RequestExecutor execute_remote)
 {
     Register("PING", "Check server availability", WithoutArguments([execute_remote](const Arguments&) {
-        return CommandResult{execute_remote("PING", "{}")};
+        return Result{execute_remote("PING", "{}")};
     }));
     Register("GET", "GET key", [execute_remote](const Arguments& args) {
         if (args.size() != 1 || args[0].empty())
-            return CommandResult{"INVALID_ARGUMENTS: GET key", false, 1};
-        return CommandResult{execute_remote("GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}")};
+            return Result{"INVALID_ARGUMENTS: GET key", false, 1};
+        return Result{execute_remote("GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}")};
     });
     Register("SET", "SET key value [NX|XX]", [execute_remote](const Arguments& args) {
         if (args.size() < 2 || args.size() > 3 || args[0].empty())
-            return CommandResult{"INVALID_ARGUMENTS: SET key value [NX|XX]", false, 1};
+            return Result{"INVALID_ARGUMENTS: SET key value [NX|XX]", false, 1};
         std::string body = "{\"key\":" + protocol::QuoteJson(args[0]) +
                            ",\"value\":" + protocol::QuoteJson(args[1]);
         if (args.size() == 3) {
             const auto flag = NormalizeCommand(args[2]);
             if (flag == "NX") body += ",\"if_not_exists\":true";
             else if (flag == "XX") body += ",\"if_exists\":true";
-            else return CommandResult{"INVALID_ARGUMENTS: expected NX or XX", false, 1};
+            else return Result{"INVALID_ARGUMENTS: expected NX or XX", false, 1};
         }
-        return CommandResult{execute_remote("SET", body + "}")};
+        return Result{execute_remote("SET", body + "}")};
     });
     Register("HELP", "Show available commands", WithoutArguments([this](const Arguments&) {
         std::string output;
@@ -65,9 +65,9 @@ Registry::Registry(RequestExecutor execute_remote)
             output += name + " - " + entry.description + '\n';
         }
         output.pop_back();
-        return CommandResult{output};
+        return Result{output};
     }));
-    const Handler quit = WithoutArguments([](const Arguments&) { return CommandResult{{}, true}; });
+    const Handler quit = WithoutArguments([](const Arguments&) { return Result{{}, true}; });
     Register("QUIT", "Close the CLI", quit);
     Register("EXIT", "Alias for QUIT", quit);
 }
@@ -82,7 +82,7 @@ void Registry::Register(std::string name, std::string description, Handler handl
     commands_.emplace(std::move(name), Entry{std::move(description), std::move(handler)});
 }
 
-CommandResult Registry::Execute(std::string_view input) const
+Result Registry::Execute(std::string_view input) const
 {
     std::istringstream stream{std::string(input)};
     std::string name;

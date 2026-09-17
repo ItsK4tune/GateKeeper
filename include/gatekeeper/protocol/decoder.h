@@ -14,7 +14,7 @@ class Decoder
 {
 public:
     bool Push(std::span<const std::uint8_t> bytes, std::vector<std::string>& payloads,
-              ProtocolError& error);
+              Error& error);
 
 private:
     std::vector<std::uint8_t> buffer_;

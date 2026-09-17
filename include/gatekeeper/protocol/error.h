@@ -1,14 +1,16 @@
-#pragma once
+﻿#pragma once
 
 #include <string>
 
 namespace gatekeeper::protocol
 {
 
-struct ProtocolError
+struct Error
 {
     std::string code;
     std::string message;
 };
+
+using ProtocolError = Error;
 
 }

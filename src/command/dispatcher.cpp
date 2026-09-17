@@ -22,7 +22,7 @@ Dispatcher::Dispatcher(std::unique_ptr<storage::Store> store)
         throw std::invalid_argument("string store is required");
     }
     Register("PING", [](const protocol::Request&) {
-        return DispatchResult{true, R"({"pong":true})", {}};
+        return Result{true, R"({"pong":true})", {}};
     });
     RegisterStringOps(*this, *store_);
 }
@@ -39,7 +39,7 @@ void Dispatcher::Register(std::string name, Handler handler)
     commands_.emplace(std::move(name), std::move(handler));
 }
 
-DispatchResult Dispatcher::Dispatch(const protocol::Request& request) const
+Result Dispatcher::Dispatch(const protocol::Request& request) const
 {
     const auto handler = commands_.find(NormalizeName(request.op));
     if (handler == commands_.end())

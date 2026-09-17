@@ -57,7 +57,7 @@ bool Object(std::string_view value, std::size_t& position, std::string* captured
 
 }
 
-bool Parser::Parse(std::string_view payload, Request& request, ProtocolError& error) const
+bool Parser::Parse(std::string_view payload, Request& request, Error& error) const
 {
     request = {};
     std::size_t position = 0;

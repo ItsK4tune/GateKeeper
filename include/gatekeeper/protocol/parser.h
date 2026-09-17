@@ -11,7 +11,7 @@ namespace gatekeeper::protocol
 class Parser
 {
 public:
-    bool Parse(std::string_view payload, Request& request, ProtocolError& error) const;
+    bool Parse(std::string_view payload, Request& request, Error& error) const;
 };
 
 using JsonRequestParser = Parser;

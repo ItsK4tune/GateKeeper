@@ -15,7 +15,7 @@ class Registry
 {
 public:
     using Arguments = std::vector<std::string>;
-    using Handler = std::function<CommandResult(const Arguments&)>;
+    using Handler = std::function<Result(const Arguments&)>;
     using RemoteExecutor = std::function<std::string(const std::string&)>;
     using RequestExecutor = std::function<std::string(const std::string&, const std::string&)>;
 
@@ -24,7 +24,7 @@ public:
     Registry(const Registry&) = delete;
     Registry& operator=(const Registry&) = delete;
     void Register(std::string name, std::string description, Handler handler);
-    CommandResult Execute(std::string_view input) const;
+    Result Execute(std::string_view input) const;
 
 private:
     struct Entry

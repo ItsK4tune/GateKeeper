@@ -34,7 +34,7 @@ bool IsValidUtf8(std::string_view text)
 }
 
 bool Decoder::Push(std::span<const std::uint8_t> bytes, std::vector<std::string>& payloads,
-                   ProtocolError& error)
+                   Error& error)
 {
     buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
     while (buffer_.size() >= 4)
