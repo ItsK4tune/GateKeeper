@@ -1,5 +1,5 @@
-#include "gatekeeper/cli/options.h"
-#include "gatekeeper/service/options.h"
+﻿#include "gatekeeper/config/cli_config.h"
+#include "gatekeeper/config/server_config.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -67,17 +67,17 @@ int main()
 {
     try
     {
-        using Cli = gatekeeper::cli::Options;
-        using Service = gatekeeper::service::Options;
+        using Cli = gatekeeper::config::CliConfig;
+        using Server = gatekeeper::config::ServerConfig;
         TestCommonRules<Cli>();
-        TestCommonRules<Service>();
+        TestCommonRules<Server>();
         const auto defaults = Parse<Cli>({"gate"});
         Require(defaults.host == "127.0.0.1" && !defaults.command, "CLI defaults changed");
         const auto cli = Parse<Cli>({"gate", "--host", "localhost", "--port", "64000", "echo", "DuOnG", "-p"});
         Require(cli.host == "localhost" && cli.port == 64000, "long options failed");
         Require(cli.command == "echo DuOnG -p", "command arguments were changed or parsed as options");
         Require(Parse<Cli>({"gate", "-h", "localhost", "PING"}).host == "localhost", "CLI -h changed");
-        Require(Parse<Service>({"gatekeeper", "-h"}).show_help, "service -h changed");
+        Require(Parse<Server>({"gatekeeper", "-h"}).show_help, "service -h changed");
         bool failed = false;
         try
         {

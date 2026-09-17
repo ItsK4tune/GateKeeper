@@ -1,4 +1,4 @@
-#include "gatekeeper/command/command_dispatcher.h"
+﻿#include "gatekeeper/command/dispatcher.h"
 
 #include <cassert>
 
@@ -7,7 +7,7 @@ namespace
 
 void TestPingReturnsPong()
 {
-    gatekeeper::command::CommandDispatcher dispatcher;
+    gatekeeper::command::Dispatcher dispatcher;
     const auto response = dispatcher.Dispatch({"request-1", "PING", "{}"});
 
     assert(response.ok);
@@ -16,7 +16,7 @@ void TestPingReturnsPong()
 
 void TestPingIgnoresCommandCase()
 {
-    gatekeeper::command::CommandDispatcher dispatcher;
+    gatekeeper::command::Dispatcher dispatcher;
     const auto response = dispatcher.Dispatch({"request-1", "pInG", "{}"});
 
     assert(response.ok);
@@ -24,7 +24,7 @@ void TestPingIgnoresCommandCase()
 
 void TestUnknownCommandReturnsAnError()
 {
-    gatekeeper::command::CommandDispatcher dispatcher;
+    gatekeeper::command::Dispatcher dispatcher;
     const auto response = dispatcher.Dispatch({"request-1", "UNKNOWN", "{}"});
 
     assert(!response.ok);
@@ -33,7 +33,7 @@ void TestUnknownCommandReturnsAnError()
 
 void TestSetStoresAValueThatGetReturns()
 {
-    gatekeeper::command::CommandDispatcher dispatcher;
+    gatekeeper::command::Dispatcher dispatcher;
 
     const auto set = dispatcher.Dispatch({"set-1", "SET", R"({"key":"name","value":"duong"})"});
     const auto get = dispatcher.Dispatch({"get-1", "GET", R"({"key":"name"})"});
@@ -46,7 +46,7 @@ void TestSetStoresAValueThatGetReturns()
 
 void TestGetMissingKeyReturnsNotFound()
 {
-    gatekeeper::command::CommandDispatcher dispatcher;
+    gatekeeper::command::Dispatcher dispatcher;
     const auto response = dispatcher.Dispatch({"get-1", "GET", R"({"key":"missing"})"});
 
     assert(!response.ok);

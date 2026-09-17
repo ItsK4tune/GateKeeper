@@ -1,4 +1,4 @@
-#include "gatekeeper/net/client_connection.h"
+﻿#include "gatekeeper/net/connection.h"
 #include "gatekeeper/protocol/frame.h"
 
 #include <array>
@@ -38,7 +38,7 @@ void TestConnection(bool handler_throws)
         bool threw = false;
         try
         {
-            gatekeeper::net::ClientConnection connection(sockets[0], handler);
+            gatekeeper::net::Connection connection(sockets[0], handler);
             connection.Serve();
         }
         catch (const std::runtime_error&)

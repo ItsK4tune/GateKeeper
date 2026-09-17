@@ -1,10 +1,10 @@
-#include "gatekeeper/command/command_dispatcher.h"
+#include "gatekeeper/command/dispatcher.h"
 #include <stdexcept>
 #include <iostream>
-using gatekeeper::command::CommandDispatcher;
+using gatekeeper::command::Dispatcher;
 void Require(bool ok) { if (!ok) throw std::runtime_error("string command contract failed"); }
 int main() {
-    CommandDispatcher d;
+    Dispatcher d;
     auto set = [&](std::string body) { return d.Dispatch({"1", "sEt", body}); };
     auto get = [&](std::string key) { return d.Dispatch({"2", "gEt", "{\"key\":\"" + key + "\"}"}); };
     Require(set(R"({"key":"k","value":"first","if_not_exists":true})").result_json == R"({"stored":true})");

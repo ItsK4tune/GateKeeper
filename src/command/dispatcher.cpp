@@ -1,0 +1,52 @@
+﻿#include "gatekeeper/command/dispatcher.h"
+#include "gatekeeper/command/name.h"
+#include "gatekeeper/command/string_ops.h"
+#include "gatekeeper/storage/memory_store.h"
+
+#include <stdexcept>
+#include <utility>
+
+namespace gatekeeper::command
+{
+
+Dispatcher::Dispatcher()
+    : Dispatcher(std::make_unique<storage::MemoryStore>())
+{
+}
+
+Dispatcher::Dispatcher(std::unique_ptr<storage::Store> store)
+    : store_(std::move(store))
+{
+    if (!store_)
+    {
+        throw std::invalid_argument("string store is required");
+    }
+    Register("PING", [](const protocol::Request&) {
+        return DispatchResult{true, R"({"pong":true})", {}};
+    });
+    RegisterStringOps(*this, *store_);
+}
+
+Dispatcher::~Dispatcher() = default;
+
+void Dispatcher::Register(std::string name, Handler handler)
+{
+    name = NormalizeName(name);
+    if (name.empty() || !handler || commands_.contains(name))
+    {
+        throw std::invalid_argument("invalid or duplicate command registration");
+    }
+    commands_.emplace(std::move(name), std::move(handler));
+}
+
+DispatchResult Dispatcher::Dispatch(const protocol::Request& request) const
+{
+    const auto handler = commands_.find(NormalizeName(request.op));
+    if (handler == commands_.end())
+    {
+        return {false, {}, {"UNKNOWN_COMMAND", "unsupported command: " + request.op}};
+    }
+    return handler->second(request);
+}
+
+}

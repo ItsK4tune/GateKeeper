@@ -1,8 +1,12 @@
-#include "gatekeeper/cli/application.h"
+﻿#include "gatekeeper/cli/app.h"
+#include "gatekeeper/cli/registry.h"
 
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace
@@ -16,29 +20,24 @@ void Require(bool condition, const std::string& message)
     }
 }
 
-std::vector<std::string> Variants(std::string word)
+std::vector<std::string> Variants(const std::string& command)
 {
-    std::vector<std::string> variants;
-    for (unsigned mask = 0; mask < (1U << word.size()); ++mask)
-    {
-        auto variant = word;
-        for (std::size_t index = 0; index < word.size(); ++index)
-        {
-            if (mask & (1U << index))
-            {
-                variant[index] += 'a' - 'A';
-            }
-        }
-        variants.push_back(variant);
-    }
-    return variants;
+    std::string upper = command;
+    std::string lower = command;
+    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return {upper, lower};
 }
 
 void TestCommandsAndExtension()
 {
     std::vector<std::string> requests;
-    gatekeeper::cli::CommandRegistry registry([&](const std::string& operation) {
-        requests.push_back(operation);
+    gatekeeper::cli::Registry registry([&requests](const std::string& command) {
+        requests.push_back(command);
         return std::string("PONG");
     });
     for (const auto& variant : Variants("HELP"))
@@ -76,11 +75,11 @@ void TestApplicationModes()
 {
     int requests = 0;
     int sessions = 0;
-    gatekeeper::cli::CommandRegistry registry([&](const std::string&) {
+    gatekeeper::cli::Registry registry([&](const std::string&) {
         ++requests;
         return std::string("PONG");
     });
-    gatekeeper::cli::Application application(registry, [&sessions]() { ++sessions; });
+    gatekeeper::cli::App application(registry, [&sessions]() { ++sessions; });
     for (const auto& word : {"QUIT", "EXIT"})
     {
         for (const auto& variant : Variants(word))
@@ -109,8 +108,8 @@ void TestApplicationModes()
 
 void TestReplOpensSessionBeforePrompt()
 {
-    gatekeeper::cli::CommandRegistry registry([](const std::string&) { return std::string("PONG"); });
-    gatekeeper::cli::Application application(registry, []() { throw std::runtime_error("CONNECTION_REFUSED"); });
+    gatekeeper::cli::Registry registry([](const std::string&) { return std::string("PONG"); });
+    gatekeeper::cli::App application(registry, []() { throw std::runtime_error("CONNECTION_REFUSED"); });
     std::istringstream input("HELP\n");
     std::ostringstream output;
 
@@ -129,7 +128,7 @@ void TestReplOpensSessionBeforePrompt()
 void TestSuggestions()
 {
     int requests = 0;
-    gatekeeper::cli::CommandRegistry registry([&](const std::string&) {
+    gatekeeper::cli::Registry registry([&](const std::string&) {
         ++requests;
         return std::string("PONG");
     });
@@ -148,7 +147,7 @@ void TestSuggestions()
     const auto result = registry.Execute("peng");
     Require(result.output.find("Did you mean: PANG, PING, PONG?") != std::string::npos, "suggestion ranking or limit failed");
     Require(requests == 0, "suggestions executed remote commands");
-    gatekeeper::cli::Application application(registry, []() {});
+    gatekeeper::cli::App application(registry, []() {});
     std::istringstream input("pin\nhelp\nquit\n");
     std::ostringstream output;
     Require(application.RunRepl(input, output) == 0, "REPL did not recover from typo");

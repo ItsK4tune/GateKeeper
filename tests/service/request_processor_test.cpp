@@ -1,5 +1,5 @@
-#include "gatekeeper/service/request_processor.h"
-#include "gatekeeper/command/command_dispatcher.h"
+﻿#include "gatekeeper/service/processor.h"
+#include "gatekeeper/command/dispatcher.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -21,14 +21,14 @@ int main()
 {
     try
     {
-        gatekeeper::command::CommandDispatcher dispatcher;
+        gatekeeper::command::Dispatcher dispatcher;
         int calls = 0;
         dispatcher.Register("CUSTOM", [&calls](const auto& request) {
             ++calls;
             Require(request.body_json == R"({"key":"Value"})", "dispatcher modified body");
             return gatekeeper::command::DispatchResult{true, R"({"custom":true})", {}};
         });
-        gatekeeper::service::RequestProcessor processor([&dispatcher](const auto& request) {
+        gatekeeper::service::Processor processor([&dispatcher](const auto& request) {
             return dispatcher.Dispatch(request);
         });
         Require(processor.Process(R"({"id":"1","op":"cUsToM","body":{"key":"Value"}})") ==

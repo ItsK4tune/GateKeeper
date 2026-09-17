@@ -1,4 +1,4 @@
-#include "gatekeeper/net/tcp_server.h"
+﻿#include "gatekeeper/net/server.h"
 
 #include <iostream>
 #include <string>
@@ -11,7 +11,7 @@ int main(int argc, char* argv[])
         {
             return 2;
         }
-        gatekeeper::net::TcpServer server(std::stoi(argv[1]), [](std::string_view) {
+        gatekeeper::net::Server server(std::stoi(argv[1]), [](std::string_view) {
             return std::string("{}");
         });
         server.Run();

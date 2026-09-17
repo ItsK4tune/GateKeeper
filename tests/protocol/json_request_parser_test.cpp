@@ -1,4 +1,4 @@
-#include "gatekeeper/protocol/json_request_parser.h"
+﻿#include "gatekeeper/protocol/parser.h"
 
 #include <cassert>
 
@@ -7,7 +7,7 @@ namespace
 
 void TestParserCreatesARequestFromAValidPayload()
 {
-    gatekeeper::protocol::JsonRequestParser parser;
+    gatekeeper::protocol::Parser parser;
     gatekeeper::protocol::Request request;
     gatekeeper::protocol::ProtocolError error;
 
@@ -19,7 +19,7 @@ void TestParserCreatesARequestFromAValidPayload()
 
 void TestParserRejectsANonObjectBody()
 {
-    gatekeeper::protocol::JsonRequestParser parser;
+    gatekeeper::protocol::Parser parser;
     gatekeeper::protocol::Request request;
     gatekeeper::protocol::ProtocolError error;
 
