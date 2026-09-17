@@ -1,5 +1,6 @@
-﻿#include "gatekeeper/command/string_body.h"
+#include "gatekeeper/command/string_body.h"
 
+#include <cctype>
 #include <stdexcept>
 
 namespace gatekeeper::command
@@ -25,6 +26,7 @@ public:
             if (Peek() == '"') value = String();
             else if (Literal("true")) value = true;
             else if (Literal("false")) value = false;
+            else if (std::isdigit(static_cast<unsigned char>(Peek()))) value = Number();
             else Fail();
             if (!result.emplace(std::move(key), std::move(value)).second) Fail();
             if (Take('}')) { End(); return result; }
@@ -42,6 +44,15 @@ private:
     bool Literal(std::string_view text) {
         if (input_.substr(pos_, text.size()) != text) return false;
         pos_ += text.size(); return true;
+    }
+    std::uint64_t Number() {
+        Skip();
+        if (pos_ >= input_.size() || !std::isdigit(static_cast<unsigned char>(input_[pos_]))) Fail();
+        std::uint64_t val = 0;
+        while (pos_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+            val = val * 10 + (input_[pos_++] - '0');
+        }
+        return val;
     }
     unsigned Hex() {
         unsigned value = 0;

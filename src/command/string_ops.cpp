@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/command/string_ops.h"
+#include "gatekeeper/command/string_ops.h"
 #include "gatekeeper/command/string_body.h"
 #include "gatekeeper/protocol/response.h"
 #include "gatekeeper/storage/store.h"
@@ -30,9 +30,28 @@ bool Flag(const StringBody& body, const char* field)
 Result Set(const protocol::Request& request, storage::Store& store)
 {
     const auto body = ParseStringBody(request.body_json);
+    std::uint64_t ttl_ms = 0;
     for (const auto& [name, value] : body)
-        if (name != "key" && name != "value" && name != "if_exists" && name != "if_not_exists")
-            throw std::invalid_argument("unsupported SET field: " + name);
+    {
+        if (name == "key" || name == "value" || name == "if_exists" || name == "if_not_exists")
+        {
+            continue;
+        }
+        if (name == "ttl_ms")
+        {
+            if (!std::holds_alternative<std::uint64_t>(value))
+            {
+                throw std::invalid_argument("ttl_ms must be an unsigned integer");
+            }
+            ttl_ms = std::get<std::uint64_t>(value);
+            if (ttl_ms == 0)
+            {
+                throw std::invalid_argument("ttl_ms must be greater than zero");
+            }
+            continue;
+        }
+        throw std::invalid_argument("unsupported SET field: " + name);
+    }
     const auto& key = RequiredString(body, "key");
     const auto& value = RequiredString(body, "value");
     if (key.empty()) throw std::invalid_argument("key must not be empty");
@@ -40,7 +59,7 @@ Result Set(const protocol::Request& request, storage::Store& store)
     if (nx && xx) throw std::invalid_argument("SET conditions conflict");
     const auto condition = nx ? storage::WriteCondition::IfAbsent
                          : xx ? storage::WriteCondition::IfPresent : storage::WriteCondition::Always;
-    return {true, store.Set(key, value, condition) ? R"({"stored":true})" : R"({"stored":false})", {}};
+    return {true, store.Set(key, value, condition, ttl_ms) ? R"({"stored":true})" : R"({"stored":false})", {}};
 }
 
 Result Get(const protocol::Request& request, storage::Store& store)

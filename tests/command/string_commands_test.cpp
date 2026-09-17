@@ -21,7 +21,7 @@ int main() {
         R"({"key":"k","value":"bad",})",
         R"({"nested":{"key":"k","value":"bad"}})",
         R"({"key":"k","value":12})",
-        R"({"key":"k","value":"bad","ttl_ms":1})"
+        R"({"key":"k","value":"bad","ttl_ms":0})"
     }) {
         const auto result = set(body);
         Require(!result.ok && result.error.code == "INVALID_ARGUMENTS");

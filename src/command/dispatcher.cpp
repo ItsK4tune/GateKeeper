@@ -2,6 +2,7 @@
 #include "gatekeeper/command/key_ops.h"
 #include "gatekeeper/command/name.h"
 #include "gatekeeper/command/string_ops.h"
+#include "gatekeeper/command/ttl_ops.h"
 #include "gatekeeper/storage/memory_store.h"
 
 #include <stdexcept>
@@ -27,6 +28,7 @@ Dispatcher::Dispatcher(std::unique_ptr<storage::Store> store)
     });
     RegisterStringOps(*this, *store_);
     RegisterKeyOps(*this, *store_);
+    RegisterTtlOps(*this, *store_);
 }
 
 Dispatcher::~Dispatcher() = default;

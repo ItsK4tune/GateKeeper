@@ -46,16 +46,38 @@ Registry::Registry(RequestExecutor execute_remote)
             return Result{"INVALID_ARGUMENTS: GET key", false, 1};
         return FormatResponse(execute_remote("GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
     });
-    Register("SET", "SET key value [NX|XX]", [execute_remote](const Arguments& args) {
-        if (args.size() < 2 || args.size() > 3 || args[0].empty())
-            return Result{"INVALID_ARGUMENTS: SET key value [NX|XX]", false, 1};
+    Register("SET", "SET key value [NX|XX] [EX seconds|PX milliseconds]", [execute_remote](const Arguments& args) {
+        if (args.size() < 2 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: SET key value [NX|XX] [EX seconds|PX milliseconds]", false, 1};
         std::string body = "{\"key\":" + protocol::QuoteJson(args[0]) +
                            ",\"value\":" + protocol::QuoteJson(args[1]);
-        if (args.size() == 3) {
-            const auto flag = NormalizeCommand(args[2]);
-            if (flag == "NX") body += ",\"if_not_exists\":true";
-            else if (flag == "XX") body += ",\"if_exists\":true";
-            else return Result{"INVALID_ARGUMENTS: expected NX or XX", false, 1};
+        bool has_cond = false;
+        bool has_ttl = false;
+        for (std::size_t i = 2; i < args.size(); ++i) {
+            const auto flag = NormalizeCommand(args[i]);
+            if ((flag == "NX" || flag == "XX") && !has_cond) {
+                if (flag == "NX") body += ",\"if_not_exists\":true";
+                else body += ",\"if_exists\":true";
+                has_cond = true;
+            } else if (flag == "EX" && i + 1 < args.size() && !has_ttl) {
+                try {
+                    const auto sec = std::stoull(args[++i]);
+                    body += ",\"ttl_ms\":" + std::to_string(sec * 1000);
+                    has_ttl = true;
+                } catch (...) {
+                    return Result{"INVALID_ARGUMENTS: invalid EX value", false, 1};
+                }
+            } else if (flag == "PX" && i + 1 < args.size() && !has_ttl) {
+                try {
+                    const auto ms = std::stoull(args[++i]);
+                    body += ",\"ttl_ms\":" + std::to_string(ms);
+                    has_ttl = true;
+                } catch (...) {
+                    return Result{"INVALID_ARGUMENTS: invalid PX value", false, 1};
+                }
+            } else {
+                return Result{"INVALID_ARGUMENTS: syntax error in SET", false, 1};
+            }
         }
         return FormatResponse(execute_remote("SET", body + "}"));
     });
@@ -96,6 +118,31 @@ Registry::Registry(RequestExecutor execute_remote)
         std::string cursor = args.empty() ? "0" : args[0];
         std::string count = args.size() > 1 ? args[1] : "10";
         return FormatResponse(execute_remote("SCAN", "{\"cursor\":" + cursor + ",\"count\":" + count + "}"));
+    });
+    Register("EXPIRE", "EXPIRE key seconds", [execute_remote](const Arguments& args) {
+        if (args.size() != 2 || args[0].empty() || args[1].empty())
+            return Result{"INVALID_ARGUMENTS: EXPIRE key seconds", false, 1};
+        return FormatResponse(execute_remote("EXPIRE", "{\"key\":" + protocol::QuoteJson(args[0]) + ",\"ttl_seconds\":" + args[1] + "}"));
+    });
+    Register("PEXPIRE", "PEXPIRE key milliseconds", [execute_remote](const Arguments& args) {
+        if (args.size() != 2 || args[0].empty() || args[1].empty())
+            return Result{"INVALID_ARGUMENTS: PEXPIRE key milliseconds", false, 1};
+        return FormatResponse(execute_remote("PEXPIRE", "{\"key\":" + protocol::QuoteJson(args[0]) + ",\"ttl_ms\":" + args[1] + "}"));
+    });
+    Register("TTL", "TTL key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: TTL key", false, 1};
+        return FormatResponse(execute_remote("TTL", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
+    });
+    Register("PTTL", "PTTL key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: PTTL key", false, 1};
+        return FormatResponse(execute_remote("PTTL", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
+    });
+    Register("PERSIST", "PERSIST key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: PERSIST key", false, 1};
+        return FormatResponse(execute_remote("PERSIST", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
     });
     Register("HELP", "Show available commands", WithoutArguments([this](const Arguments&) {
         std::string output;

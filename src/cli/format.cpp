@@ -76,9 +76,19 @@ bool ParseBool(std::string_view value, std::size_t& pos, bool& out)
     return false;
 }
 
-bool ParseNumber(std::string_view value, std::size_t& pos, std::uint64_t& out)
+bool ParseNumber(std::string_view value, std::size_t& pos, std::int64_t& out)
 {
     SkipWs(value, pos);
+    if (pos >= value.size())
+    {
+        return false;
+    }
+    bool neg = false;
+    if (value[pos] == '-')
+    {
+        neg = true;
+        ++pos;
+    }
     if (pos >= value.size() || !std::isdigit(static_cast<unsigned char>(value[pos])))
     {
         return false;
@@ -88,6 +98,7 @@ bool ParseNumber(std::string_view value, std::size_t& pos, std::uint64_t& out)
     {
         out = out * 10 + (value[pos++] - '0');
     }
+    if (neg) out = -out;
     return true;
 }
 
@@ -206,6 +217,20 @@ Result FormatResponse(std::string_view gkwp_json)
         return Result{"(nil)"};
     }
 
+    for (const char* bool_field : {"\"set\":", "\"persisted\":"})
+    {
+        auto pos = gkwp_json.find(bool_field);
+        if (pos != std::string_view::npos)
+        {
+            pos += std::string_view(bool_field).size();
+            bool b = false;
+            if (ParseBool(gkwp_json, pos, b))
+            {
+                return Result{b ? "(integer) 1" : "(integer) 0"};
+            }
+        }
+    }
+
     auto val_pos = gkwp_json.find("\"value\":");
     if (val_pos != std::string_view::npos)
     {
@@ -217,13 +242,13 @@ Result FormatResponse(std::string_view gkwp_json)
         }
     }
 
-    for (const char* int_field : {"\"deleted\":", "\"count\":", "\"size\":"})
+    for (const char* int_field : {"\"deleted\":", "\"count\":", "\"size\":", "\"ttl_seconds\":", "\"ttl_ms\":"})
     {
         auto pos = gkwp_json.find(int_field);
         if (pos != std::string_view::npos)
         {
             pos += std::string_view(int_field).size();
-            std::uint64_t n = 0;
+            std::int64_t n = 0;
             if (ParseNumber(gkwp_json, pos, n))
             {
                 return Result{"(integer) " + std::to_string(n)};
@@ -246,7 +271,7 @@ Result FormatResponse(std::string_view gkwp_json)
     if (scan_pos != std::string_view::npos)
     {
         scan_pos += 9;
-        std::uint64_t next_cursor = 0;
+        std::int64_t next_cursor = 0;
         if (ParseNumber(gkwp_json, scan_pos, next_cursor))
         {
             auto keys_pos = gkwp_json.find("\"keys\":");
