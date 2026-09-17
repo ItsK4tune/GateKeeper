@@ -15,7 +15,7 @@ public:
     TcpClient(const TcpClient&) = delete;
     TcpClient& operator=(const TcpClient&) = delete;
     void Open();
-    std::string Execute(const std::string& operation);
+    std::string Execute(const std::string& operation, const std::string& body = "{}");
 
 private:
     void Close();

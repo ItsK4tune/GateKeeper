@@ -2,7 +2,10 @@
 
 #include "gatekeeper/cli/command.h"
 #include "gatekeeper/cli/command_suggestions.h"
+#include "gatekeeper/protocol/string_body.h"
 
+#include <iomanip>
+#include <cctype>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -26,10 +29,36 @@ CommandRegistry::Handler WithoutArguments(CommandRegistry::Handler handler)
 }
 
 CommandRegistry::CommandRegistry(RemoteExecutor execute_remote)
+    : CommandRegistry(RequestExecutor{[execute_remote](const std::string& op, const std::string& body) {
+        if (body != "{}") throw std::invalid_argument("transport does not support command arguments");
+        return execute_remote(op);
+    }})
+{
+}
+
+CommandRegistry::CommandRegistry(RequestExecutor execute_remote)
 {
     Register("PING", "Check server availability", WithoutArguments([execute_remote](const Arguments&) {
-        return CommandResult{execute_remote("PING")};
+        return CommandResult{execute_remote("PING", "{}")};
     }));
+    Register("GET", "GET key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return CommandResult{"INVALID_ARGUMENTS: GET key", false, 1};
+        return CommandResult{execute_remote("GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}")};
+    });
+    Register("SET", "SET key value [NX|XX]", [execute_remote](const Arguments& args) {
+        if (args.size() < 2 || args.size() > 3 || args[0].empty())
+            return CommandResult{"INVALID_ARGUMENTS: SET key value [NX|XX]", false, 1};
+        std::string body = "{\"key\":" + protocol::QuoteJson(args[0]) +
+                           ",\"value\":" + protocol::QuoteJson(args[1]);
+        if (args.size() == 3) {
+            const auto flag = NormalizeCommand(args[2]);
+            if (flag == "NX") body += ",\"if_not_exists\":true";
+            else if (flag == "XX") body += ",\"if_exists\":true";
+            else return CommandResult{"INVALID_ARGUMENTS: expected NX or XX", false, 1};
+        }
+        return CommandResult{execute_remote("SET", body + "}")};
+    });
     Register("HELP", "Show available commands", WithoutArguments([this](const Arguments&) {
         std::string output;
         for (const auto& [name, entry] : commands_)
@@ -86,8 +115,13 @@ CommandResult CommandRegistry::Execute(std::string_view input) const
         return {std::move(message), false, 1};
     }
     Arguments arguments;
-    for (std::string argument; stream >> argument;)
-    {
+    while (stream >> std::ws && !stream.eof()) {
+        std::string argument;
+        if (!(stream >> std::quoted(argument)))
+            return {"INVALID_ARGUMENTS: unterminated quoted argument", false, 1};
+        if (stream.peek() != std::char_traits<char>::eof() &&
+            !std::isspace(static_cast<unsigned char>(stream.peek())))
+            return {"INVALID_ARGUMENTS: expected whitespace after argument", false, 1};
         arguments.push_back(std::move(argument));
     }
     try

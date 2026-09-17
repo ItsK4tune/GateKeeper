@@ -9,3 +9,5 @@ build/
 out/
 log/
 
+# design, audit, verification, etc. file
+docs/

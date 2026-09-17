@@ -19,9 +19,13 @@ gatekeeper_library(gk_protocol
     src/protocol/frame_decoder.cpp
     src/protocol/json_request_parser.cpp
     src/protocol/response.cpp
+    src/protocol/string_body.cpp
 )
-gatekeeper_library(gk_commands src/command/command_dispatcher.cpp)
-target_link_libraries(gk_commands PUBLIC gk_protocol gk_command_names)
+gatekeeper_library(gk_storage src/storage/in_memory_string_store.cpp)
+gatekeeper_library(gk_commands
+    src/command/command_dispatcher.cpp
+    src/command/string_commands.cpp)
+target_link_libraries(gk_commands PUBLIC gk_protocol gk_command_names gk_storage)
 
 gatekeeper_library(gk_service src/service/options.cpp src/service/request_processor.cpp)
 target_link_libraries(gk_service PUBLIC gk_config gk_commands)
@@ -32,7 +36,7 @@ gatekeeper_library(gk_cli
     src/cli/command_registry.cpp
     src/cli/command_suggestions.cpp
 )
-target_link_libraries(gk_cli PUBLIC gk_config gk_command_names)
+target_link_libraries(gk_cli PUBLIC gk_config gk_command_names gk_protocol)
 
 if(UNIX)
     gatekeeper_library(gk_network_errors src/net/network_error.cpp)
@@ -50,6 +54,10 @@ endif()
 include(CTest)
 
 if(BUILD_TESTING)
+    add_executable(string_commands_tests tests/command/string_commands_test.cpp)
+    target_link_libraries(string_commands_tests PRIVATE gk_commands)
+    add_test(NAME string_commands_tests COMMAND string_commands_tests)
+
     add_executable(options_tests tests/options_test.cpp)
     target_link_libraries(options_tests PRIVATE gk_cli gk_service)
     add_test(NAME options_tests COMMAND options_tests)
@@ -86,6 +94,10 @@ if(BUILD_TESTING)
         set_tests_properties(client_connection_tests PROPERTIES TIMEOUT 10)
         find_package(Python3 COMPONENTS Interpreter)
         if(Python3_Interpreter_FOUND)
+            add_test(NAME string_cli_integration_tests
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/cli/string_integration_test.py
+                    $<TARGET_FILE:gatekeeper> $<TARGET_FILE:gate>)
+            set_tests_properties(string_cli_integration_tests PROPERTIES TIMEOUT 30)
             add_test(NAME cli_integration_tests
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/cli/integration_test.py $<TARGET_FILE:gate>)
             add_test(NAME network_error_tests

@@ -186,7 +186,7 @@ void TcpClient::SendAll(std::span<const std::uint8_t> bytes)
     }
 }
 
-std::string TcpClient::Execute(const std::string& operation)
+std::string TcpClient::Execute(const std::string& operation, const std::string& body)
 {
     if (operation.empty() || operation.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._") != std::string::npos)
     {
@@ -196,7 +196,7 @@ std::string TcpClient::Execute(const std::string& operation)
     try
     {
         const auto payload = "{\"id\":\"gate-" + std::to_string(next_id_++) +
-                             "\",\"op\":\"" + operation + "\",\"body\":{}}";
+                             "\",\"op\":\"" + operation + "\",\"body\":" + body + "}";
         SendAll(protocol::EncodeFrame(payload));
         std::array<std::uint8_t, 4> header{};
         ReadAll(header);

@@ -22,8 +22,10 @@ public:
     using Arguments = std::vector<std::string>;
     using Handler = std::function<CommandResult(const Arguments&)>;
     using RemoteExecutor = std::function<std::string(const std::string&)>;
+    using RequestExecutor = std::function<std::string(const std::string&, const std::string&)>;
 
     explicit CommandRegistry(RemoteExecutor execute_remote);
+    explicit CommandRegistry(RequestExecutor execute_remote);
     CommandRegistry(const CommandRegistry&) = delete;
     CommandRegistry& operator=(const CommandRegistry&) = delete;
     void Register(std::string name, std::string description, Handler handler);

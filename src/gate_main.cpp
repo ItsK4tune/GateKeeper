@@ -15,8 +15,8 @@ int main(int argc, char* argv[])
             return 0;
         }
         gatekeeper::cli::TcpClient client(options.host, static_cast<std::uint16_t>(options.port));
-        gatekeeper::cli::CommandRegistry commands([&client](const std::string& operation) {
-            return client.Execute(operation);
+        gatekeeper::cli::CommandRegistry commands([&client](const std::string& operation, const std::string& body) {
+            return client.Execute(operation, body);
         });
         gatekeeper::cli::Application application(commands, [&client]() { client.Open(); });
         return options.command ? application.RunCommand(*options.command, std::cout)
