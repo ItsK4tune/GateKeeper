@@ -156,8 +156,43 @@ void TestSuggestions()
 
 }
 
+#include "gatekeeper/cli/format.h"
+#include <cassert>
+
+namespace {
+void TestFormatResponse()
+{
+    // Test PING
+    auto r1 = gatekeeper::cli::FormatResponse(R"({"id":"gate-1","ok":true,"result":{"pong":true}})");
+    assert(r1.output == "PONG");
+    assert(r1.exit_code == 0);
+
+    // Test SET ok
+    auto r2 = gatekeeper::cli::FormatResponse(R"({"id":"gate-1","ok":true,"result":{"stored":true}})");
+    assert(r2.output == "OK");
+
+    // Test SET false
+    auto r3 = gatekeeper::cli::FormatResponse(R"({"id":"gate-1","ok":true,"result":{"stored":false}})");
+    assert(r3.output == "(nil)");
+
+    // Test GET value
+    auto r4 = gatekeeper::cli::FormatResponse(R"({"id":"gate-1","ok":true,"result":{"value":"duong"}})");
+    assert(r4.output == "\"duong\"");
+
+    // Test error
+    auto r5 = gatekeeper::cli::FormatResponse(R"({"id":"gate-1","ok":false,"error":{"code":"KEY_NOT_FOUND","message":"key does not exist"}})");
+    assert(r5.output == "(error) KEY_NOT_FOUND: key does not exist");
+    assert(r5.exit_code != 0);
+
+    // Test non-json
+    auto r6 = gatekeeper::cli::FormatResponse("RAW_TEXT");
+    assert(r6.output == "RAW_TEXT");
+}
+}
+
 int main()
 {
+    TestFormatResponse();
     try
     {
         TestCommandsAndExtension();

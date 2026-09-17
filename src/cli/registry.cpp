@@ -1,4 +1,5 @@
 ﻿#include "gatekeeper/cli/registry.h"
+#include "gatekeeper/cli/format.h"
 #include "gatekeeper/cli/command.h"
 #include "gatekeeper/cli/suggest.h"
 #include "gatekeeper/protocol/response.h"
@@ -38,12 +39,12 @@ Registry::Registry(RemoteExecutor execute_remote)
 Registry::Registry(RequestExecutor execute_remote)
 {
     Register("PING", "Check server availability", WithoutArguments([execute_remote](const Arguments&) {
-        return Result{execute_remote("PING", "{}")};
+        return FormatResponse(execute_remote("PING", "{}"));
     }));
     Register("GET", "GET key", [execute_remote](const Arguments& args) {
         if (args.size() != 1 || args[0].empty())
             return Result{"INVALID_ARGUMENTS: GET key", false, 1};
-        return Result{execute_remote("GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}")};
+        return FormatResponse(execute_remote("GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
     });
     Register("SET", "SET key value [NX|XX]", [execute_remote](const Arguments& args) {
         if (args.size() < 2 || args.size() > 3 || args[0].empty())
@@ -56,7 +57,7 @@ Registry::Registry(RequestExecutor execute_remote)
             else if (flag == "XX") body += ",\"if_exists\":true";
             else return Result{"INVALID_ARGUMENTS: expected NX or XX", false, 1};
         }
-        return Result{execute_remote("SET", body + "}")};
+        return FormatResponse(execute_remote("SET", body + "}"));
     });
     Register("HELP", "Show available commands", WithoutArguments([this](const Arguments&) {
         std::string output;

@@ -1,4 +1,4 @@
-import json
+﻿import json
 import socket
 import struct
 import subprocess
@@ -53,7 +53,7 @@ def round_trip(executable, repl):
         result = subprocess.run(args, input="Help\npInG\nqUiT\nPING\n" if repl else None,
                                 text=True, capture_output=True, timeout=8)
         require(result.returncode == 0, result.stderr or result.stdout)
-        require('"pong": true' in result.stdout, "PING response missing")
+        require("PONG" in result.stdout, "PING response missing")
     finally:
         worker.join(6)
         listener.close()

@@ -63,6 +63,7 @@ gatekeeper_library(gk_cli
     src/cli/suggest.cpp
     src/cli/registry.cpp
     src/cli/app.cpp
+    src/cli/format.cpp
 )
 target_link_libraries(gk_cli PUBLIC gk_config gk_command_names gk_net)
 

@@ -1,4 +1,4 @@
-import socket
+﻿import socket
 import subprocess
 import sys
 import time
@@ -47,7 +47,7 @@ for flag in ("-p", "--port"):
                 require(time.monotonic() < deadline, "server did not open custom port")
                 time.sleep(0.02)
         result = subprocess.run([gate, "-p", str(port), "PING"], capture_output=True, text=True, timeout=3)
-        require(result.returncode == 0 and '"pong":true' in result.stdout,
+        require(result.returncode == 0 and "PONG" in result.stdout,
                 "PING on custom port failed: " + result.stdout + result.stderr)
     finally:
         process.terminate()
