@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gatekeeper/log/logger.h"
+#include "gatekeeper/net/event_loop.h"
 #include "gatekeeper/net/request_handler.h"
 
 #include <cstdint>
@@ -19,6 +20,7 @@ public:
     Server& operator=(const Server&) = delete;
 
     void Run();
+    void Stop();
 
 private:
     int port_;
@@ -26,9 +28,9 @@ private:
     RequestHandler handler_;
     std::shared_ptr<log::Logger> logger_;
     std::uint64_t next_session_id_{1};
+    std::unique_ptr<EventLoop> loop_;
 
     void SetupSocket();
-    void AcceptConnection();
 };
 
 using TcpServer = Server;

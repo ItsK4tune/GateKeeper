@@ -1,17 +1,34 @@
-﻿#include "gatekeeper/net/server.h"
-#include "gatekeeper/net/connection.h"
+#include "gatekeeper/net/server.h"
+#include "gatekeeper/net/channel.h"
 #include "gatekeeper/net/error.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <stdexcept>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <utility>
 
 namespace gatekeeper::net
 {
+
+namespace
+{
+
+void SetNonBlocking(int fd)
+{
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags != -1)
+    {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+}
+
+}
 
 Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger)
     : port_(port), server_fd_(-1), handler_(std::move(handler)), logger_(std::move(logger))
@@ -33,6 +50,7 @@ Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> lo
 
 Server::~Server()
 {
+    Stop();
     if (server_fd_ != -1)
     {
         logger_->Info("Closing server listening socket fd=" + std::to_string(server_fd_));
@@ -40,13 +58,63 @@ Server::~Server()
     }
 }
 
+void Server::Stop()
+{
+    if (loop_)
+    {
+        loop_->Stop();
+    }
+}
+
 void Server::Run()
 {
     SetupSocket();
-    while (true)
-    {
-        AcceptConnection();
-    }
+    loop_ = std::make_unique<EventLoop>();
+    std::unordered_map<int, std::unique_ptr<Channel>> channels;
+
+    loop_->Add(server_fd_, EPOLLIN, [this, &channels](std::uint32_t) {
+        while (true)
+        {
+            sockaddr_in client_addr{};
+            socklen_t client_len = sizeof(client_addr);
+            const int client_fd = accept(server_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+            if (client_fd == -1)
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    break;
+                }
+                if (errno == EINTR)
+                {
+                    continue;
+                }
+                break;
+            }
+            SetNonBlocking(client_fd);
+            char ip_str[INET_ADDRSTRLEN] = "unknown";
+            inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
+            const auto client_info = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
+            const auto session_id = next_session_id_++;
+            logger_->Info("Accepted connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
+
+            auto channel = std::make_unique<Channel>(client_fd, *loop_, handler_, logger_, session_id, client_info);
+            channels.emplace(client_fd, std::move(channel));
+
+            loop_->Add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLERR, [&channels, client_fd](std::uint32_t ev) {
+                auto it = channels.find(client_fd);
+                if (it != channels.end())
+                {
+                    it->second->HandleEvents(ev);
+                    if (it->second->IsClosed())
+                    {
+                        channels.erase(it);
+                    }
+                }
+            });
+        }
+    });
+
+    loop_->Run();
 }
 
 void Server::SetupSocket()
@@ -72,43 +140,14 @@ void Server::SetupSocket()
         logger_->Error(error_str);
         throw std::runtime_error(error_str);
     }
-    if (listen(server_fd_, 16) == -1)
+    if (listen(server_fd_, 128) == -1)
     {
         const auto error_str = DescribeError("listen on", endpoint, errno);
         logger_->Error(error_str);
         throw std::runtime_error(error_str);
     }
+    SetNonBlocking(server_fd_);
     logger_->Info("GateKeeper server listening on " + endpoint);
-}
-
-void Server::AcceptConnection()
-{
-    sockaddr_in client_addr{};
-    socklen_t client_len = sizeof(client_addr);
-    const int client_fd = accept(server_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
-    if (client_fd == -1)
-    {
-        if (errno == EINTR)
-        {
-            return;
-        }
-        const auto error_str = DescribeError("accept on", "0.0.0.0:" + std::to_string(port_), errno);
-        logger_->Error(error_str);
-        throw std::runtime_error(error_str);
-    }
-    char ip_str[INET_ADDRSTRLEN] = "unknown";
-    inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
-    const auto client_info = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
-    logger_->Info("Accepted connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
-    try
-    {
-        const auto session_id = next_session_id_++;
-    Connection(client_fd, handler_, logger_, session_id, client_info).Serve();
-    }
-    catch (const std::exception& error)
-    {
-        logger_->Error(std::string("Client connection error: ") + error.what());
-    }
 }
 
 }

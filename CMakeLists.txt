@@ -57,6 +57,8 @@ gatekeeper_library(gk_net
     src/net/connection.cpp
     src/net/server.cpp
     src/net/client.cpp
+    src/net/event_loop.cpp
+    src/net/channel.cpp
 )
 target_link_libraries(gk_net PUBLIC gk_protocol gk_log)
 
@@ -94,6 +96,10 @@ if(BUILD_TESTING)
     add_executable(concurrent_clients_tests tests/net/concurrent_clients_test.cpp)
     target_link_libraries(concurrent_clients_tests PRIVATE gk_net gk_storage)
     add_test(NAME concurrent_clients_tests COMMAND concurrent_clients_tests)
+
+    add_executable(event_loop_tests tests/net/event_loop_test.cpp)
+    target_link_libraries(event_loop_tests PRIVATE gk_net)
+    add_test(NAME event_loop_tests COMMAND event_loop_tests)
 
     add_executable(options_tests tests/options_test.cpp)
     target_link_libraries(options_tests PRIVATE gk_config)
