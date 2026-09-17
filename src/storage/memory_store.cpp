@@ -1,4 +1,4 @@
-#include "gatekeeper/storage/memory_store.h"
+﻿#include "gatekeeper/storage/memory_store.h"
 
 #include <chrono>
 #include <utility>
@@ -13,7 +13,7 @@ std::uint64_t CurrentTimeMs()
 {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
+            std::chrono::steady_clock::now().time_since_epoch())
             .count());
 }
 

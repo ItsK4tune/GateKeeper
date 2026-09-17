@@ -1,12 +1,12 @@
-#include "gatekeeper/net/event_loop.h"
+﻿#include "gatekeeper/net/event_loop.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <stdexcept>
 #include <sys/epoll.h>
 #include <unistd.h>
-#include <vector>
 
 namespace gatekeeper::net
 {
@@ -104,7 +104,7 @@ void EventLoop::RunOnce(int timeout_ms)
         }
     }
 
-    std::vector<epoll_event> events(64);
+    std::array<epoll_event, 64> events{};
     const int n = epoll_wait(epoll_fd_, events.data(), static_cast<int>(events.size()), effective_timeout);
     if (n < 0)
     {

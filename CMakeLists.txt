@@ -33,6 +33,7 @@ gatekeeper_library(gk_protocol
     src/protocol/decoder.cpp
     src/protocol/parser.cpp
     src/protocol/response.cpp
+    src/protocol/json_reader.cpp
 )
 
 gatekeeper_library(gk_storage

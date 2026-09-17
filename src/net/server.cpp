@@ -1,4 +1,4 @@
-#include "gatekeeper/net/server.h"
+﻿#include "gatekeeper/net/server.h"
 #include "gatekeeper/net/channel.h"
 #include "gatekeeper/net/error.h"
 
@@ -31,13 +31,13 @@ void SetNonBlocking(int fd)
 }
 
 Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger,
-               int timer_interval_ms, TickCallback tick_handler)
+               int timer_interval_ms, TimerCallback timer_callback)
     : port_(port),
       server_fd_(-1),
       handler_(std::move(handler)),
       logger_(std::move(logger)),
       timer_interval_ms_(timer_interval_ms),
-      tick_handler_(std::move(tick_handler))
+      timer_callback_(std::move(timer_callback))
 {
     if (!logger_)
     {
@@ -64,13 +64,13 @@ Server::~Server()
     }
 }
 
-void Server::SetTickHandler(int interval_ms, TickCallback tick_handler)
+void Server::SetTimerCallback(int interval_ms, TimerCallback timer_callback)
 {
     timer_interval_ms_ = interval_ms;
-    tick_handler_ = std::move(tick_handler);
+    timer_callback_ = std::move(timer_callback);
     if (loop_)
     {
-        loop_->SetPeriodicTimer(timer_interval_ms_, tick_handler_);
+        loop_->SetPeriodicTimer(timer_interval_ms_, timer_callback_);
     }
 }
 
@@ -86,9 +86,9 @@ void Server::Run()
 {
     SetupSocket();
     loop_ = std::make_unique<EventLoop>();
-    if (timer_interval_ms_ >= 0 && tick_handler_)
+    if (timer_interval_ms_ >= 0 && timer_callback_)
     {
-        loop_->SetPeriodicTimer(timer_interval_ms_, tick_handler_);
+        loop_->SetPeriodicTimer(timer_interval_ms_, timer_callback_);
     }
     std::unordered_map<int, std::unique_ptr<Channel>> channels;
 

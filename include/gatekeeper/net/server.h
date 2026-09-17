@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/event_loop.h"
@@ -14,16 +14,21 @@ namespace gatekeeper::net
 class Server
 {
 public:
-    using TickCallback = std::function<void()>;
+    using TimerCallback = EventLoop::TimerCallback;
+    using TickCallback = TimerCallback;
 
     Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(),
-           int timer_interval_ms = -1, TickCallback tick_handler = nullptr);
+           int timer_interval_ms = -1, TimerCallback timer_callback = nullptr);
     ~Server();
 
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
 
-    void SetTickHandler(int interval_ms, TickCallback tick_handler);
+    void SetTimerCallback(int interval_ms, TimerCallback timer_callback);
+    void SetTickHandler(int interval_ms, TimerCallback timer_callback)
+    {
+        SetTimerCallback(interval_ms, std::move(timer_callback));
+    }
     [[nodiscard]] int GetTimerInterval() const noexcept { return timer_interval_ms_; }
 
     void Run();
@@ -35,7 +40,7 @@ private:
     RequestHandler handler_;
     std::shared_ptr<log::Logger> logger_;
     int timer_interval_ms_{-1};
-    TickCallback tick_handler_;
+    TimerCallback timer_callback_;
     std::uint64_t next_session_id_{1};
     std::unique_ptr<EventLoop> loop_;
 

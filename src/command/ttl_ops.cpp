@@ -1,7 +1,7 @@
-#include "gatekeeper/command/ttl_ops.h"
+﻿#include "gatekeeper/command/ttl_ops.h"
+#include "gatekeeper/protocol/json_reader.h"
 #include "gatekeeper/protocol/response.h"
 
-#include <cctype>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -11,106 +11,7 @@ namespace gatekeeper::command
 namespace
 {
 
-class JsonReader
-{
-public:
-    explicit JsonReader(std::string_view input) : input_(input) {}
-
-    void Skip()
-    {
-        while (pos_ < input_.size() && std::isspace(static_cast<unsigned char>(input_[pos_])))
-        {
-            ++pos_;
-        }
-    }
-
-    char Peek()
-    {
-        Skip();
-        return pos_ < input_.size() ? input_[pos_] : '\0';
-    }
-
-    bool Take(char c)
-    {
-        Skip();
-        if (pos_ < input_.size() && input_[pos_] == c)
-        {
-            ++pos_;
-            return true;
-        }
-        return false;
-    }
-
-    void Expect(char c)
-    {
-        if (!Take(c))
-        {
-            throw std::invalid_argument(std::string("expected '") + c + "'");
-        }
-    }
-
-    void End()
-    {
-        Skip();
-        if (pos_ != input_.size())
-        {
-            throw std::invalid_argument("unexpected trailing characters");
-        }
-    }
-
-    std::string String()
-    {
-        Expect('"');
-        std::string out;
-        while (pos_ < input_.size())
-        {
-            char c = input_[pos_++];
-            if (c == '"')
-            {
-                return out;
-            }
-            if (c == '\\')
-            {
-                if (pos_ >= input_.size())
-                {
-                    throw std::invalid_argument("incomplete escape sequence");
-                }
-                char esc = input_[pos_++];
-                if (esc == '"' || esc == '\\' || esc == '/') out += esc;
-                else if (esc == 'b') out += '\b';
-                else if (esc == 'f') out += '\f';
-                else if (esc == 'n') out += '\n';
-                else if (esc == 'r') out += '\r';
-                else if (esc == 't') out += '\t';
-                else out += esc;
-            }
-            else
-            {
-                out += c;
-            }
-        }
-        throw std::invalid_argument("unterminated string");
-    }
-
-    std::uint64_t UnsignedNumber()
-    {
-        Skip();
-        if (pos_ >= input_.size() || !std::isdigit(static_cast<unsigned char>(input_[pos_])))
-        {
-            throw std::invalid_argument("expected unsigned number");
-        }
-        std::uint64_t val = 0;
-        while (pos_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[pos_])))
-        {
-            val = val * 10 + (input_[pos_++] - '0');
-        }
-        return val;
-    }
-
-private:
-    std::string_view input_;
-    std::size_t pos_{0};
-};
+using protocol::JsonReader;
 
 Result Expire(const protocol::Request& request, storage::Store& store)
 {
