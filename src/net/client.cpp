@@ -233,10 +233,11 @@ std::string Client::Execute(const std::string& operation, const std::string& bod
             logger_->Error(err_msg);
             throw std::runtime_error(err_msg);
         }
-        std::vector<std::uint8_t> response(length);
-        ReadAll(response);
-        logger_->Debug("Received response (" + std::to_string(length) + " bytes) for id=\"" + req_id + "\"");
-        return {response.begin(), response.end()};
+        std::vector<std::uint8_t> response_bytes(length);
+        ReadAll(response_bytes);
+        std::string response(response_bytes.begin(), response_bytes.end());
+        logger_->Info("Received GKWP response: " + response);
+        return response;
     }
     catch (...)
     {

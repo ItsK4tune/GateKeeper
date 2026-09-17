@@ -28,18 +28,25 @@ std::string Processor::Process(std::string_view payload) const
     const protocol::Parser parser;
     if (!parser.Parse(payload, request, error))
     {
+        const auto err_response = protocol::EncodeErrorResponse(request.id, error);
         logger_->Warn("Failed to parse request: " + error.code + " - " + error.message);
-        return protocol::EncodeErrorResponse(request.id, error);
+        logger_->Info("Response GKWP: " + err_response);
+        return err_response;
     }
     logger_->Info("Executing request id=\"" + request.id + "\" op=\"" + request.op + "\"");
     const auto result = dispatch_(request);
+    std::string response;
     if (result.ok)
     {
-        logger_->Info("Request id=\"" + request.id + "\" completed successfully");
-        return protocol::EncodeSuccessResponse(request.id, result.result_json);
+        response = protocol::EncodeSuccessResponse(request.id, result.result_json);
+        logger_->Info("Response GKWP: " + response);
     }
-    logger_->Warn("Request id=\"" + request.id + "\" failed: " + result.error.code + " - " + result.error.message);
-    return protocol::EncodeErrorResponse(request.id, result.error);
+    else
+    {
+        response = protocol::EncodeErrorResponse(request.id, result.error);
+        logger_->Warn("Response GKWP: " + response);
+    }
+    return response;
 }
 
 }

@@ -78,14 +78,17 @@ void Connection::Serve()
         protocol::Error error;
         if (!decoder.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), payloads, error))
         {
+            const auto err_response = protocol::EncodeErrorResponse("", error);
             logger_->Warn("Protocol error from client fd=" + std::to_string(client_fd_) + ": " + error.code + " - " + error.message);
-            SendAll(protocol::EncodeFrame(protocol::EncodeErrorResponse("", error)));
+            logger_->Info("Sending GKWP error response to client fd=" + std::to_string(client_fd_) + ": " + err_response);
+            SendAll(protocol::EncodeFrame(err_response));
             return;
         }
         for (const auto& payload : payloads)
         {
             logger_->Debug("Processing request payload (" + std::to_string(payload.size()) + " bytes) for fd=" + std::to_string(client_fd_));
             const auto response = handler_(payload);
+            logger_->Info("Sending GKWP response to client fd=" + std::to_string(client_fd_) + ": " + response);
             if (!SendAll(protocol::EncodeFrame(response)))
             {
                 return;
