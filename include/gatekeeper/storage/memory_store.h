@@ -1,9 +1,13 @@
-﻿#pragma once
+#pragma once
 
+#include "gatekeeper/storage/entry.h"
+#include "gatekeeper/storage/hash_table.h"
 #include "gatekeeper/storage/store.h"
 
-#include <map>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace gatekeeper::storage
 {
@@ -16,7 +20,7 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    std::map<std::string, std::string, std::less<>> values_;
+    HashTable<std::string, Entry> entries_;
 };
 
 using InMemoryStringStore = MemoryStore;

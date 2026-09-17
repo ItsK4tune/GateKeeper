@@ -1,29 +1,44 @@
-﻿#include "gatekeeper/storage/memory_store.h"
+#include "gatekeeper/storage/memory_store.h"
 
+#include <chrono>
+#include <mutex>
 #include <utility>
 
 namespace gatekeeper::storage
 {
 
+namespace
+{
+std::uint64_t CurrentTimeMs()
+{
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+}
+}
+
 bool MemoryStore::Set(std::string key, std::string value, WriteCondition condition)
 {
     const std::lock_guard lock(mutex_);
-    const auto existing = values_.find(key);
-    if (condition == WriteCondition::IfAbsent && existing != values_.end())
+    auto* existing = entries_.Find(key);
+    if (condition == WriteCondition::IfAbsent && existing != nullptr)
     {
         return false;
     }
-    if (condition == WriteCondition::IfPresent && existing == values_.end())
+    if (condition == WriteCondition::IfPresent && existing == nullptr)
     {
         return false;
     }
-    if (existing == values_.end())
+    if (existing == nullptr)
     {
-        values_.emplace(std::move(key), std::move(value));
+        Entry entry{key, std::move(value), EntryMetadata{DataType::String, CurrentTimeMs(), 0}};
+        entries_.Insert(std::move(key), std::move(entry));
     }
     else
     {
-        existing->second = std::move(value);
+        existing->value = std::move(value);
+        existing->meta.type = DataType::String;
     }
     return true;
 }
@@ -31,12 +46,12 @@ bool MemoryStore::Set(std::string key, std::string value, WriteCondition conditi
 std::optional<std::string> MemoryStore::Get(std::string_view key) const
 {
     const std::lock_guard lock(mutex_);
-    const auto existing = values_.find(key);
-    if (existing == values_.end())
+    const auto* existing = entries_.Find(std::string(key));
+    if (existing == nullptr)
     {
         return std::nullopt;
     }
-    return existing->second;
+    return existing->value;
 }
 
 }
