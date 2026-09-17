@@ -12,11 +12,17 @@ function(gatekeeper_library target)
     target_include_directories(${target} PUBLIC ${PROJECT_SOURCE_DIR}/include)
 endfunction()
 
+gatekeeper_library(gk_log
+    src/log/logger.cpp
+    src/log/sink.cpp
+)
+
 gatekeeper_library(gk_config
     src/config/arguments.cpp
     src/config/server_config.cpp
     src/config/cli_config.cpp
 )
+target_link_libraries(gk_config PUBLIC gk_log)
 
 gatekeeper_library(gk_command_names
     src/command/name.cpp
@@ -43,7 +49,7 @@ target_link_libraries(gk_commands PUBLIC gk_protocol gk_command_names gk_storage
 gatekeeper_library(gk_service
     src/service/processor.cpp
 )
-target_link_libraries(gk_service PUBLIC gk_config gk_commands)
+target_link_libraries(gk_service PUBLIC gk_config gk_commands gk_log)
 
 gatekeeper_library(gk_net
     src/net/error.cpp
@@ -51,7 +57,7 @@ gatekeeper_library(gk_net
     src/net/server.cpp
     src/net/client.cpp
 )
-target_link_libraries(gk_net PUBLIC gk_protocol)
+target_link_libraries(gk_net PUBLIC gk_protocol gk_log)
 
 gatekeeper_library(gk_cli
     src/cli/suggest.cpp
@@ -62,10 +68,10 @@ target_link_libraries(gk_cli PUBLIC gk_config gk_command_names gk_net)
 
 if(UNIX)
     add_executable(gatekeeper src/server_main.cpp)
-    target_link_libraries(gatekeeper PRIVATE gk_service gk_net)
+    target_link_libraries(gatekeeper PRIVATE gk_service gk_net gk_log)
 
     add_executable(gate src/cli_main.cpp)
-    target_link_libraries(gate PRIVATE gk_cli gk_net)
+    target_link_libraries(gate PRIVATE gk_cli gk_net gk_log)
 endif()
 
 include(CTest)

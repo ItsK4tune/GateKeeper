@@ -71,8 +71,13 @@ int ConnectWithTimeout(int socket_fd, const sockaddr* address, socklen_t length)
 
 }
 
-Client::Client(std::string host, std::uint16_t port) : host_(std::move(host)), port_(port)
+Client::Client(std::string host, std::uint16_t port, std::shared_ptr<log::Logger> logger)
+    : host_(std::move(host)), port_(port), logger_(std::move(logger))
 {
+    if (!logger_)
+    {
+        logger_ = log::Logger::Null();
+    }
     if (host_.empty())
     {
         throw std::invalid_argument("INVALID_HOST: host cannot be empty");
@@ -92,6 +97,7 @@ void Client::Close()
 {
     if (socket_fd_ != -1)
     {
+        logger_->Info("Closing connection to " + host_ + ':' + std::to_string(port_));
         close(socket_fd_);
         socket_fd_ = -1;
     }
@@ -103,16 +109,19 @@ void Client::Open()
     {
         return;
     }
+    const auto service = std::to_string(port_);
+    logger_->Info("Connecting to " + host_ + ':' + service + "...");
     addrinfo hints{};
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_family = AF_UNSPEC;
     addrinfo* addresses = nullptr;
-    const auto service = std::to_string(port_);
     const int status = getaddrinfo(host_.c_str(), service.c_str(), &hints, &addresses);
     if (status != 0)
     {
-        throw std::runtime_error("DNS_ERROR: cannot resolve " + host_ + ':' + service + ": " +
-                                 gai_strerror(status) + ". Check the host name or use an IP address.");
+        const auto err_msg = "DNS_ERROR: cannot resolve " + host_ + ':' + service + ": " +
+                             gai_strerror(status) + ". Check the host name or use an IP address.";
+        logger_->Error(err_msg);
+        throw std::runtime_error(err_msg);
     }
     int last_error = ECONNREFUSED;
     for (auto* address = addresses; address != nullptr; address = address->ai_next)
@@ -133,7 +142,9 @@ void Client::Open()
     freeaddrinfo(addresses);
     if (socket_fd_ == -1)
     {
-        throw std::runtime_error(DescribeError("connect to", host_ + ':' + service, last_error));
+        const auto err_msg = DescribeError("connect to", host_ + ':' + service, last_error);
+        logger_->Error(err_msg);
+        throw std::runtime_error(err_msg);
     }
     const timeval timeout{5, 0};
     if (setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1 ||
@@ -141,8 +152,11 @@ void Client::Open()
     {
         const int error = errno;
         Close();
-        throw std::runtime_error(DescribeError("set timeout for", host_ + ':' + service, error));
+        const auto err_msg = DescribeError("set timeout for", host_ + ':' + service, error);
+        logger_->Error(err_msg);
+        throw std::runtime_error(err_msg);
     }
+    logger_->Info("Connected to " + host_ + ':' + service);
 }
 
 void Client::ReadAll(std::span<std::uint8_t> bytes)
@@ -156,12 +170,16 @@ void Client::ReadAll(std::span<std::uint8_t> bytes)
         }
         if (received == 0)
         {
-            throw std::runtime_error("CONNECTION_CLOSED: " + host_ + ':' + std::to_string(port_) +
-                                     " closed before the complete response was received.");
+            const auto err_msg = "CONNECTION_CLOSED: " + host_ + ':' + std::to_string(port_) +
+                                 " closed before the complete response was received.";
+            logger_->Error(err_msg);
+            throw std::runtime_error(err_msg);
         }
         if (received < 0)
         {
-            throw std::runtime_error(DescribeError("read from", host_ + ':' + std::to_string(port_), errno));
+            const auto err_msg = DescribeError("read from", host_ + ':' + std::to_string(port_), errno);
+            logger_->Error(err_msg);
+            throw std::runtime_error(err_msg);
         }
         bytes = bytes.subspan(static_cast<std::size_t>(received));
     }
@@ -178,8 +196,10 @@ void Client::SendAll(std::span<const std::uint8_t> bytes)
         }
         if (written <= 0)
         {
-            throw std::runtime_error(DescribeError("write to", host_ + ':' + std::to_string(port_),
-                                                   written == 0 ? EPIPE : errno));
+            const auto err_msg = DescribeError("write to", host_ + ':' + std::to_string(port_),
+                                               written == 0 ? EPIPE : errno);
+            logger_->Error(err_msg);
+            throw std::runtime_error(err_msg);
         }
         bytes = bytes.subspan(static_cast<std::size_t>(written));
     }
@@ -194,9 +214,13 @@ std::string Client::Execute(const std::string& operation, const std::string& bod
     Open();
     try
     {
-        const auto payload = "{\"id\":\"gate-" + std::to_string(next_id_++) +
+        const auto req_id = "gate-" + std::to_string(next_id_++);
+        const auto payload = "{\"id\":\"" + req_id +
                              "\",\"op\":\"" + operation + "\",\"body\":" + body + "}";
+        logger_->Info("Sending request id=\"" + req_id + "\" op=\"" + operation + "\"");
         SendAll(protocol::EncodeFrame(payload));
+        logger_->Debug("Sent request frame for id=\"" + req_id + "\"");
+
         std::array<std::uint8_t, 4> header{};
         ReadAll(header);
         const auto length = (static_cast<std::uint32_t>(header[0]) << 24U) |
@@ -204,11 +228,14 @@ std::string Client::Execute(const std::string& operation, const std::string& bod
                             (static_cast<std::uint32_t>(header[2]) << 8U) | header[3];
         if (length == 0 || length > protocol::kMaxFrameSize)
         {
-            throw std::runtime_error("INVALID_FRAME: response from " + host_ + ':' + std::to_string(port_) +
-                                     " declares " + std::to_string(length) + " bytes; expected 1..1048576.");
+            const auto err_msg = "INVALID_FRAME: response from " + host_ + ':' + std::to_string(port_) +
+                                 " declares " + std::to_string(length) + " bytes; expected 1..1048576.";
+            logger_->Error(err_msg);
+            throw std::runtime_error(err_msg);
         }
         std::vector<std::uint8_t> response(length);
         ReadAll(response);
+        logger_->Debug("Received response (" + std::to_string(length) + " bytes) for id=\"" + req_id + "\"");
         return {response.begin(), response.end()};
     }
     catch (...)

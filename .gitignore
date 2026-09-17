@@ -7,7 +7,9 @@ build/
 
 # log file
 out/
-log/
+/log/
+logs/
+*.log
 
 # design, audit, verification, etc. file
 docs/

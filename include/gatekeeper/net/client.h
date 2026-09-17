@@ -1,6 +1,9 @@
 ﻿#pragma once
 
+#include "gatekeeper/log/logger.h"
+
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 
@@ -10,7 +13,7 @@ namespace gatekeeper::net
 class Client
 {
 public:
-    Client(std::string host, std::uint16_t port);
+    Client(std::string host, std::uint16_t port, std::shared_ptr<log::Logger> logger = log::Logger::Null());
     ~Client();
 
     Client(const Client&) = delete;
@@ -23,6 +26,7 @@ public:
 private:
     std::string host_;
     std::uint16_t port_;
+    std::shared_ptr<log::Logger> logger_;
     int socket_fd_ = -1;
     std::uint64_t next_id_ = 1;
 

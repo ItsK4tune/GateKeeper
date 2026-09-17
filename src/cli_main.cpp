@@ -1,5 +1,6 @@
 ﻿#include "gatekeeper/cli/app.h"
 #include "gatekeeper/config/cli_config.h"
+#include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/client.h"
 
 #include <iostream>
@@ -14,7 +15,8 @@ int main(int argc, char* argv[])
             std::cout << gatekeeper::config::CliConfig::Usage();
             return 0;
         }
-        gatekeeper::net::Client client(config.host, static_cast<std::uint16_t>(config.port));
+        auto logger = gatekeeper::log::Logger::Create(config.log_mode);
+        gatekeeper::net::Client client(config.host, static_cast<std::uint16_t>(config.port), logger);
         gatekeeper::cli::Registry commands([&client](const std::string& operation, const std::string& body) {
             return client.Execute(operation, body);
         });
