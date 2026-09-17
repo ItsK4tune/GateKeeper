@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/config/cli_config.h"
+#include "gatekeeper/config/cli_config.h"
 #include "gatekeeper/config/server_config.h"
 
 #include <iostream>
@@ -78,6 +78,40 @@ int main()
         Require(cli.command == "echo DuOnG -p", "command arguments were changed or parsed as options");
         Require(Parse<Cli>({"gate", "-h", "localhost", "PING"}).host == "localhost", "CLI -h changed");
         Require(Parse<Server>({"gatekeeper", "-h"}).show_help, "service -h changed");
+        Require(Parse<Server>({"gatekeeper"}).timer_interval_ms == -1, "default timer changed");
+        Require(Parse<Server>({"gatekeeper", "-t", "-1"}).timer_interval_ms == -1, "negative 1 timer rejected");
+        Require(Parse<Server>({"gatekeeper", "-t", "0"}).timer_interval_ms == 0, "zero timer rejected");
+        Require(Parse<Server>({"gatekeeper", "--timer", "100"}).timer_interval_ms == 100, "timer option failed");
+        Require(Parse<Server>({"gatekeeper", "--cron", "500"}).timer_interval_ms == 500, "cron option failed");
+
+        for (const auto* value : {"-2", "abc", "100ms", "", "99999999999999"})
+        {
+            bool timer_failed = false;
+            try
+            {
+                Parse<Server>({"gatekeeper", "-t", value});
+            }
+            catch (const std::invalid_argument& error)
+            {
+                timer_failed = std::string(error.what()).starts_with("INVALID_OPTION:");
+            }
+            Require(timer_failed, "invalid timer accepted");
+        }
+        for (const auto arguments : {std::initializer_list<const char*>{"gatekeeper", "-t"},
+                                    {"gatekeeper", "-t", "100", "--timer", "200"}})
+        {
+            bool timer_failed = false;
+            try
+            {
+                Parse<Server>(arguments);
+            }
+            catch (const std::invalid_argument& error)
+            {
+                timer_failed = std::string(error.what()).starts_with("INVALID_OPTION:");
+            }
+            Require(timer_failed, "invalid timer option accepted");
+        }
+
         bool failed = false;
         try
         {

@@ -30,8 +30,14 @@ void SetNonBlocking(int fd)
 
 }
 
-Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger)
-    : port_(port), server_fd_(-1), handler_(std::move(handler)), logger_(std::move(logger))
+Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger,
+               int timer_interval_ms, TickCallback tick_handler)
+    : port_(port),
+      server_fd_(-1),
+      handler_(std::move(handler)),
+      logger_(std::move(logger)),
+      timer_interval_ms_(timer_interval_ms),
+      tick_handler_(std::move(tick_handler))
 {
     if (!logger_)
     {
@@ -58,6 +64,16 @@ Server::~Server()
     }
 }
 
+void Server::SetTickHandler(int interval_ms, TickCallback tick_handler)
+{
+    timer_interval_ms_ = interval_ms;
+    tick_handler_ = std::move(tick_handler);
+    if (loop_)
+    {
+        loop_->SetPeriodicTimer(timer_interval_ms_, tick_handler_);
+    }
+}
+
 void Server::Stop()
 {
     if (loop_)
@@ -70,6 +86,10 @@ void Server::Run()
 {
     SetupSocket();
     loop_ = std::make_unique<EventLoop>();
+    if (timer_interval_ms_ >= 0 && tick_handler_)
+    {
+        loop_->SetPeriodicTimer(timer_interval_ms_, tick_handler_);
+    }
     std::unordered_map<int, std::unique_ptr<Channel>> channels;
 
     loop_->Add(server_fd_, EPOLLIN, [this, &channels](std::uint32_t) {

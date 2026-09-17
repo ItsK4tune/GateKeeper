@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/config/arguments.h"
 #include "gatekeeper/log/logger.h"
@@ -15,6 +15,7 @@ struct ServerConfig
     bool show_help = false;
     log::Mode log_mode = log::Mode::None;
     std::string log_dir;
+    int timer_interval_ms = -1;
 
     static ServerConfig Parse(int argc, const char* const* argv);
     static std::string_view Usage();

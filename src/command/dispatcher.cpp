@@ -53,4 +53,19 @@ Result Dispatcher::Dispatch(const protocol::Request& request) const
     return handler->second(request);
 }
 
+std::size_t Dispatcher::PurgeExpired(std::size_t sample_limit)
+{
+    return store_ ? store_->PurgeExpired(sample_limit) : 0;
+}
+
+storage::Store& Dispatcher::GetStore() noexcept
+{
+    return *store_;
+}
+
+const storage::Store& Dispatcher::GetStore() const noexcept
+{
+    return *store_;
+}
+
 }

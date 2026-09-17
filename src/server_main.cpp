@@ -1,10 +1,11 @@
-﻿#include "gatekeeper/config/server_config.h"
+#include "gatekeeper/config/server_config.h"
 #include "gatekeeper/command/dispatcher.h"
 #include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/server.h"
 #include "gatekeeper/service/processor.h"
 
 #include <iostream>
+#include <string>
 
 int main(int argc, char* argv[])
 {
@@ -22,14 +23,25 @@ int main(int argc, char* argv[])
         gatekeeper::service::Processor processor([&dispatcher](const auto& request) {
             return dispatcher.Dispatch(request);
         }, logger);
-        gatekeeper::net::Server server(config.port, [&processor](std::string_view payload) {
-            return processor.Process(payload);
-        }, logger);
+        gatekeeper::net::Server server(
+            config.port,
+            [&processor](std::string_view payload) {
+                return processor.Process(payload);
+            },
+            logger,
+            config.timer_interval_ms,
+            [&dispatcher, &logger]() {
+                const auto purged = dispatcher.PurgeExpired(50);
+                if (purged > 0)
+                {
+                    logger->Info("Active expiration purged " + std::to_string(purged) + " keys");
+                }
+            });
         server.Run();
     }
     catch (const std::exception& error)
     {
-        std::cerr << "gatekeeper: " << error.what() << '\n';
+        std::cerr << "gatekeeper: " << error.what() << "\n";
         return 1;
     }
 

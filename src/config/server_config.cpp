@@ -1,5 +1,6 @@
-﻿#include "gatekeeper/config/server_config.h"
+#include "gatekeeper/config/server_config.h"
 
+#include <charconv>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -13,6 +14,7 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
     bool has_port = false;
     bool has_log = false;
     bool has_log_dir = false;
+    bool has_timer = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string_view argument = argv[index];
@@ -54,6 +56,17 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
                 config.log_mode = log::Mode::File;
             }
         }
+        else if (argument == "--timer" || argument == "-t" || argument == "--cron")
+        {
+            const auto value = config::ReadOptionValue(argc, argv, index, "timer", has_timer);
+            int interval = -1;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), interval);
+            if (error != std::errc{} || end != value.data() + value.size() || interval < -1)
+            {
+                throw std::invalid_argument("INVALID_OPTION: invalid timer interval: " + std::string(value));
+            }
+            config.timer_interval_ms = interval;
+        }
         else
         {
             throw std::invalid_argument("INVALID_OPTION: unknown option: " + std::string(argument) +
@@ -65,10 +78,11 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
 
 std::string_view ServerConfig::Usage()
 {
-    return "Usage: gatekeeper [-p port | --port port] [-l mode | --log mode] [-d dir | --log-dir dir] [--help]\n"
+    return "Usage: gatekeeper [-p port | --port port] [-l mode | --log mode] [-d dir | --log-dir dir] [-t ms | --timer ms] [--help]\n"
            "  -p, --port     TCP listening port (default: 63779, range: 1..65535)\n"
            "  -l, --log      Logging mode: none, terminal, file (default: none)\n"
            "  -d, --log-dir  Directory to write log file (<dir>/log)\n"
+           "  -t, --timer    Periodic timer interval in milliseconds (-1 to disable, default: -1)\n"
            "  -h, --help     Show this help\n";
 }
 

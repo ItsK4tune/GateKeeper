@@ -1,6 +1,8 @@
 #include "gatekeeper/net/event_loop.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <stdexcept>
 #include <sys/epoll.h>
 #include <unistd.h>
@@ -53,6 +55,24 @@ bool EventLoop::Remove(int fd)
     return epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) == 0;
 }
 
+void EventLoop::SetPeriodicTimer(int interval_ms, TimerCallback callback)
+{
+    if (interval_ms < 0 || !callback)
+    {
+        timer_interval_ms_ = -1;
+        timer_callback_ = nullptr;
+        return;
+    }
+    timer_interval_ms_ = interval_ms;
+    timer_callback_ = std::move(callback);
+    last_tick_ = std::chrono::steady_clock::now();
+}
+
+void EventLoop::SetTimer(int interval_ms, TimerCallback callback)
+{
+    SetPeriodicTimer(interval_ms, std::move(callback));
+}
+
 void EventLoop::Run()
 {
     running_ = true;
@@ -64,8 +84,28 @@ void EventLoop::Run()
 
 void EventLoop::RunOnce(int timeout_ms)
 {
+    int effective_timeout = timeout_ms;
+    if (timer_interval_ms_ >= 0 && timer_callback_)
+    {
+        if (timer_interval_ms_ == 0)
+        {
+            effective_timeout = 0;
+        }
+        else
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick_).count();
+            const auto remaining = static_cast<int>(timer_interval_ms_ - elapsed);
+            effective_timeout = (remaining > 0) ? remaining : 0;
+        }
+        if (timeout_ms >= 0 && timeout_ms < effective_timeout)
+        {
+            effective_timeout = timeout_ms;
+        }
+    }
+
     std::vector<epoll_event> events(64);
-    const int n = epoll_wait(epoll_fd_, events.data(), static_cast<int>(events.size()), timeout_ms);
+    const int n = epoll_wait(epoll_fd_, events.data(), static_cast<int>(events.size()), effective_timeout);
     if (n < 0)
     {
         if (errno == EINTR)
@@ -82,6 +122,17 @@ void EventLoop::RunOnce(int timeout_ms)
         {
             auto cb = it->second;
             cb(events[i].events);
+        }
+    }
+
+    if (timer_interval_ms_ >= 0 && timer_callback_)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick_).count();
+        if (elapsed >= timer_interval_ms_)
+        {
+            last_tick_ = now;
+            timer_callback_();
         }
     }
 }

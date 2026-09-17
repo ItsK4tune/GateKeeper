@@ -1,9 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/command/result.h"
 #include "gatekeeper/protocol/request.h"
 #include "gatekeeper/storage/store.h"
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -26,6 +27,10 @@ public:
 
     void Register(std::string name, Handler handler);
     Result Dispatch(const protocol::Request& request) const;
+    std::size_t PurgeExpired(std::size_t sample_limit = 50);
+
+    [[nodiscard]] storage::Store& GetStore() noexcept;
+    [[nodiscard]] const storage::Store& GetStore() const noexcept;
 
 private:
     std::unique_ptr<storage::Store> store_;

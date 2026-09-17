@@ -1,6 +1,8 @@
-﻿#include "gatekeeper/command/dispatcher.h"
+#include "gatekeeper/command/dispatcher.h"
 
 #include <cassert>
+#include <chrono>
+#include <thread>
 
 namespace
 {
@@ -53,6 +55,14 @@ void TestGetMissingKeyReturnsNotFound()
     assert(response.error.code == "KEY_NOT_FOUND");
 }
 
+void TestDispatcherPurgeExpired()
+{
+    gatekeeper::command::Dispatcher dispatcher;
+    dispatcher.Dispatch({"set-1", "SET", R"({"key":"temp","value":"val","ttl_ms":10})"});
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    assert(dispatcher.PurgeExpired(10) == 1);
+}
+
 }
 
 void RunCommandDispatcherTests()
@@ -62,4 +72,5 @@ void RunCommandDispatcherTests()
     TestUnknownCommandReturnsAnError();
     TestSetStoresAValueThatGetReturns();
     TestGetMissingKeyReturnsNotFound();
+    TestDispatcherPurgeExpired();
 }

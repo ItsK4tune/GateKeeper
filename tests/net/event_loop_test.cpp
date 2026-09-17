@@ -71,6 +71,33 @@ void TestEventLoopAndChannel()
     close(sp[1]);
 }
 
+void TestEventLoopPeriodicTimer()
+{
+    gatekeeper::net::EventLoop loop;
+    Require(!loop.HasTimer(), "initial timer state wrong");
+    Require(loop.GetTimerInterval() == -1, "initial timer interval wrong");
+
+    int tick_count = 0;
+    loop.SetPeriodicTimer(10, [&loop, &tick_count]() {
+        ++tick_count;
+        if (tick_count >= 3)
+        {
+            loop.Stop();
+        }
+    });
+
+    Require(loop.HasTimer(), "timer should be active");
+    Require(loop.GetTimerInterval() == 10, "timer interval wrong");
+
+    loop.Run();
+
+    Require(tick_count >= 3, "timer should have ticked at least 3 times");
+
+    loop.SetPeriodicTimer(-1, nullptr);
+    Require(!loop.HasTimer(), "timer should be inactive after reset");
+    Require(loop.GetTimerInterval() == -1, "timer interval should be -1");
+}
+
 }
 
 int main()
@@ -78,6 +105,7 @@ int main()
     try
     {
         TestEventLoopAndChannel();
+        TestEventLoopPeriodicTimer();
         std::cout << "EventLoop and Channel tests passed\n";
         return 0;
     }
