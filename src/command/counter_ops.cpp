@@ -129,6 +129,7 @@ Result RateLimit(const protocol::Request& request, storage::Store& store)
     bool has_limit = false;
     std::uint64_t window_ms = 0;
     bool has_window = false;
+    std::uint64_t cost = 1;
 
     JsonReader reader(request.body_json);
     reader.Expect('{');
@@ -155,6 +156,10 @@ Result RateLimit(const protocol::Request& request, storage::Store& store)
             window_ms = reader.UnsignedNumber() * 1000;
             has_window = true;
         }
+        else if (field == "cost")
+        {
+            cost = reader.UnsignedNumber();
+        }
         else
         {
             throw std::invalid_argument("unsupported GK.RATE_LIMIT field: " + field);
@@ -172,7 +177,7 @@ Result RateLimit(const protocol::Request& request, storage::Store& store)
         throw std::invalid_argument("GK.RATE_LIMIT requires key, limit and window_ms");
     }
 
-    const auto res = store.RateLimit(key, limit, window_ms);
+    const auto res = store.RateLimit(key, limit, window_ms, cost);
     if (!res.ok)
     {
         return Result{false, {}, {res.error_code, res.error_message}};

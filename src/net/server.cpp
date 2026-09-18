@@ -1,6 +1,7 @@
 ﻿#include "gatekeeper/net/server.h"
 #include "gatekeeper/net/channel.h"
 #include "gatekeeper/net/error.h"
+#include "gatekeeper/net/http_channel.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -31,13 +32,17 @@ void SetNonBlocking(int fd)
 }
 
 Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger,
-               int timer_interval_ms, TimerCallback timer_callback)
+               int timer_interval_ms, TimerCallback timer_callback,
+               int http_port, HttpHandler http_handler)
     : port_(port),
       server_fd_(-1),
       handler_(std::move(handler)),
       logger_(std::move(logger)),
       timer_interval_ms_(timer_interval_ms),
-      timer_callback_(std::move(timer_callback))
+      timer_callback_(std::move(timer_callback)),
+      http_port_(http_port),
+      http_server_fd_(-1),
+      http_handler_(std::move(http_handler))
 {
     if (!logger_)
     {
@@ -47,11 +52,23 @@ Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> lo
     {
         throw std::invalid_argument("INVALID_PORT: port must be between 1 and 65535");
     }
+    if (http_port_ != 0 && (http_port_ < 1 || http_port_ > 65535))
+    {
+        throw std::invalid_argument("INVALID_PORT: http port must be between 1 and 65535");
+    }
+    if (http_port_ > 0 && http_port_ == port_)
+    {
+        throw std::invalid_argument("INVALID_PORT: http port cannot be the same as gatekeeper tcp port");
+    }
     if (!handler_)
     {
         throw std::invalid_argument("request handler is required");
     }
     logger_->Info("Initializing GateKeeper server on port " + std::to_string(port_));
+    if (http_port_ > 0)
+    {
+        logger_->Info("HTTP API enabled on port " + std::to_string(http_port_));
+    }
 }
 
 Server::~Server()
@@ -61,6 +78,11 @@ Server::~Server()
     {
         logger_->Info("Closing server listening socket fd=" + std::to_string(server_fd_));
         close(server_fd_);
+    }
+    if (http_server_fd_ != -1)
+    {
+        logger_->Info("Closing HTTP server listening socket fd=" + std::to_string(http_server_fd_));
+        close(http_server_fd_);
     }
 }
 
@@ -74,6 +96,12 @@ void Server::SetTimerCallback(int interval_ms, TimerCallback timer_callback)
     }
 }
 
+void Server::SetHttpHandler(int http_port, HttpHandler http_handler)
+{
+    http_port_ = http_port;
+    http_handler_ = std::move(http_handler);
+}
+
 void Server::Stop()
 {
     if (loop_)
@@ -85,12 +113,17 @@ void Server::Stop()
 void Server::Run()
 {
     SetupSocket();
+    if (http_port_ > 0 && http_handler_)
+    {
+        SetupHttpSocket();
+    }
     loop_ = std::make_unique<EventLoop>();
     if (timer_interval_ms_ >= 0 && timer_callback_)
     {
         loop_->SetPeriodicTimer(timer_interval_ms_, timer_callback_);
     }
     std::unordered_map<int, std::unique_ptr<Channel>> channels;
+    std::unordered_map<int, std::unique_ptr<HttpChannel>> http_channels;
 
     loop_->Add(server_fd_, EPOLLIN, [this, &channels](std::uint32_t) {
         while (true)
@@ -134,6 +167,50 @@ void Server::Run()
         }
     });
 
+    if (http_server_fd_ != -1)
+    {
+        loop_->Add(http_server_fd_, EPOLLIN, [this, &http_channels](std::uint32_t) {
+            while (true)
+            {
+                sockaddr_in client_addr{};
+                socklen_t client_len = sizeof(client_addr);
+                const int client_fd = accept(http_server_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+                if (client_fd == -1)
+                {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    {
+                        break;
+                    }
+                    if (errno == EINTR)
+                    {
+                        continue;
+                    }
+                    break;
+                }
+                SetNonBlocking(client_fd);
+                char ip_str[INET_ADDRSTRLEN] = "unknown";
+                inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
+                const auto client_info = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
+                logger_->Info("Accepted HTTP connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
+
+                auto channel = std::make_unique<HttpChannel>(client_fd, *loop_, http_handler_, logger_, client_info);
+                http_channels.emplace(client_fd, std::move(channel));
+
+                loop_->Add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLERR, [&http_channels, client_fd](std::uint32_t ev) {
+                    auto it = http_channels.find(client_fd);
+                    if (it != http_channels.end())
+                    {
+                        it->second->HandleEvents(ev);
+                        if (it->second->IsClosed())
+                        {
+                            http_channels.erase(it);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     loop_->Run();
 }
 
@@ -168,6 +245,39 @@ void Server::SetupSocket()
     }
     SetNonBlocking(server_fd_);
     logger_->Info("GateKeeper server listening on " + endpoint);
+}
+
+void Server::SetupHttpSocket()
+{
+    http_server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    const auto endpoint = "0.0.0.0:" + std::to_string(http_port_);
+    if (http_server_fd_ == -1)
+    {
+        const auto error_str = DescribeError("create HTTP listening socket for", endpoint, errno);
+        logger_->Error(error_str);
+        throw std::runtime_error(error_str);
+    }
+    int reuse = 1;
+    setsockopt(http_server_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(http_port_);
+    if (bind(http_server_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1)
+    {
+        const auto error_str = DescribeError("bind HTTP", endpoint, errno);
+        logger_->Error(error_str);
+        throw std::runtime_error(error_str);
+    }
+    if (listen(http_server_fd_, 128) == -1)
+    {
+        const auto error_str = DescribeError("listen HTTP on", endpoint, errno);
+        logger_->Error(error_str);
+        throw std::runtime_error(error_str);
+    }
+    SetNonBlocking(http_server_fd_);
+    logger_->Info("GateKeeper HTTP API server listening on " + endpoint);
 }
 
 }

@@ -83,6 +83,8 @@ int main()
         Require(Parse<Server>({"gatekeeper", "-t", "0"}).timer_interval_ms == 0, "zero timer rejected");
         Require(Parse<Server>({"gatekeeper", "--timer", "100"}).timer_interval_ms == 100, "timer option failed");
         Require(Parse<Server>({"gatekeeper", "--cron", "500"}).timer_interval_ms == 500, "cron option failed");
+        Require(Parse<Server>({"gatekeeper"}).http_port == 0, "default http_port changed");
+        Require(Parse<Server>({"gatekeeper", "--http-port", "8080"}).http_port == 8080, "http_port option failed");
 
         for (const auto* value : {"-2", "abc", "100ms", "", "99999999999999"})
         {

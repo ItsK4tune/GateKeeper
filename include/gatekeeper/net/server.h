@@ -1,7 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/event_loop.h"
+#include "gatekeeper/net/http_channel.h"
 #include "gatekeeper/net/request_handler.h"
 
 #include <cstdint>
@@ -17,7 +18,8 @@ public:
     using TimerCallback = EventLoop::TimerCallback;
 
     Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(),
-           int timer_interval_ms = -1, TimerCallback timer_callback = nullptr);
+           int timer_interval_ms = -1, TimerCallback timer_callback = nullptr,
+           int http_port = 0, HttpHandler http_handler = nullptr);
     ~Server();
 
     Server(const Server&) = delete;
@@ -25,6 +27,7 @@ public:
 
     void SetTimerCallback(int interval_ms, TimerCallback timer_callback);
     [[nodiscard]] int GetTimerInterval() const noexcept { return timer_interval_ms_; }
+    void SetHttpHandler(int http_port, HttpHandler http_handler);
 
     void Run();
     void Stop();
@@ -36,10 +39,14 @@ private:
     std::shared_ptr<log::Logger> logger_;
     int timer_interval_ms_{-1};
     TimerCallback timer_callback_;
+    int http_port_{0};
+    int http_server_fd_{-1};
+    HttpHandler http_handler_{nullptr};
     std::uint64_t next_session_id_{1};
     std::unique_ptr<EventLoop> loop_;
 
     void SetupSocket();
+    void SetupHttpSocket();
 };
 
 }

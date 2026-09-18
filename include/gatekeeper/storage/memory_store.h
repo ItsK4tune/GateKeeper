@@ -36,7 +36,7 @@ public:
     std::size_t PurgeExpired(std::size_t sample_limit) override;
 
     IncrResult IncrBy(std::string_view key, std::int64_t delta, std::uint64_t init_ttl_ms = 0) override;
-    RateLimitResult RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms) override;
+    RateLimitResult RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms, std::uint64_t cost = 1) override;
 
     ReservationResult ReserveQuota(std::string_view key, std::uint64_t amount, std::uint64_t ttl_ms) override;
     CommitResult CommitQuota(std::string_view key, std::string_view reservation_id, std::uint64_t actual_amount) override;

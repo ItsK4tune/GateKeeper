@@ -352,7 +352,7 @@ IncrResult MemoryStore::IncrBy(std::string_view key, std::int64_t delta, std::ui
     return {true, current_val, {}, {}};
 }
 
-RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms)
+RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms, std::uint64_t cost)
 {
     if (limit == 0)
     {
@@ -361,6 +361,10 @@ RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit
     if (window_ms == 0)
     {
         return {false, false, 0, 0, "INVALID_ARGUMENTS", "window_ms must be greater than zero"};
+    }
+    if (cost == 0)
+    {
+        cost = 1;
     }
 
     const std::lock_guard lock(mutex_);
@@ -375,11 +379,18 @@ RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit
 
     if (existing == nullptr)
     {
-        const auto expire_at = now + window_ms;
-        Entry entry{key_str, "1", EntryMetadata{DataType::String, now, expire_at}};
-        entries_.Insert(key_str, std::move(entry));
-        const auto remaining = (limit > 1) ? (limit - 1) : 0;
-        return {true, true, remaining, 0, {}, {}};
+        if (cost <= limit)
+        {
+            const auto expire_at = now + window_ms;
+            Entry entry{key_str, std::to_string(cost), EntryMetadata{DataType::String, now, expire_at}};
+            entries_.Insert(key_str, std::move(entry));
+            const auto remaining = limit - cost;
+            return {true, true, remaining, 0, {}, {}};
+        }
+        else
+        {
+            return {true, false, 0, window_ms, {}, {}};
+        }
     }
 
     std::uint64_t current_count = 0;
@@ -408,15 +419,15 @@ RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit
         retry_after = window_ms;
     }
 
-    if (current_count < limit)
+    if (current_count + cost <= limit)
     {
-        ++current_count;
+        current_count += cost;
         existing->value = std::to_string(current_count);
         const auto remaining = limit - current_count;
         return {true, true, remaining, 0, {}, {}};
     }
 
-    return {true, false, 0, retry_after, {}, {}};
+    return {true, false, limit >= current_count ? limit - current_count : 0, retry_after, {}, {}};
 }
 
 ReservationResult MemoryStore::ReserveQuota(std::string_view key, std::uint64_t amount, std::uint64_t ttl_ms)
