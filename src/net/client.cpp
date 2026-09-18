@@ -1,6 +1,6 @@
 ﻿#include "gatekeeper/net/client.h"
 #include "gatekeeper/net/error.h"
-#include "gatekeeper/protocol/frame.h"
+#include "gatekeeper/protocol/gkwp/frame.h"
 
 #include <array>
 #include <cerrno>

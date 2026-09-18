@@ -1,6 +1,6 @@
-﻿#include "gatekeeper/config/server_config.h"
+﻿#include "gatekeeper/core/config/server_config.h"
 #include "gatekeeper/command/dispatcher.h"
-#include "gatekeeper/log/logger.h"
+#include "gatekeeper/core/log/logger.h"
 #include "gatekeeper/net/server.h"
 #include "gatekeeper/service/processor.h"
 #include "gatekeeper/service/http_service.h"

@@ -1,7 +1,7 @@
 ﻿#include "gatekeeper/net/server.h"
 #include "gatekeeper/net/channel.h"
 #include "gatekeeper/net/error.h"
-#include "gatekeeper/net/http_channel.h"
+#include "gatekeeper/protocol/http/http_channel.h"
 
 #include <arpa/inet.h>
 #include <cerrno>

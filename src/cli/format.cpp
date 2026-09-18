@@ -1,6 +1,6 @@
 ﻿#include <cstdint>
 #include "gatekeeper/cli/format.h"
-#include "gatekeeper/protocol/response.h"
+#include "gatekeeper/protocol/gkwp/response.h"
 
 #include <cctype>
 #include <iomanip>

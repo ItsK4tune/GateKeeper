@@ -1,5 +1,5 @@
 ﻿#include "gatekeeper/net/connection.h"
-#include "gatekeeper/protocol/frame.h"
+#include "gatekeeper/protocol/gkwp/frame.h"
 
 #include <array>
 #include <iostream>

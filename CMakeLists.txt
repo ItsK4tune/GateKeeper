@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 
 project(GateKeeper VERSION 0.1.0 LANGUAGES CXX)
 
@@ -13,14 +13,14 @@ function(gatekeeper_library target)
 endfunction()
 
 gatekeeper_library(gk_log
-    src/log/logger.cpp
-    src/log/sink.cpp
+    src/core/log/logger.cpp
+    src/core/log/sink.cpp
 )
 
 gatekeeper_library(gk_config
-    src/config/arguments.cpp
-    src/config/server_config.cpp
-    src/config/cli_config.cpp
+    src/core/config/arguments.cpp
+    src/core/config/server_config.cpp
+    src/core/config/cli_config.cpp
 )
 target_link_libraries(gk_config PUBLIC gk_log)
 
@@ -29,27 +29,32 @@ gatekeeper_library(gk_command_names
 )
 
 gatekeeper_library(gk_protocol
-    src/protocol/frame.cpp
-    src/protocol/decoder.cpp
-    src/protocol/parser.cpp
-    src/protocol/response.cpp
-    src/protocol/json_reader.cpp
+    src/protocol/gkwp/frame.cpp
+    src/protocol/gkwp/decoder.cpp
+    src/protocol/gkwp/parser.cpp
+    src/protocol/gkwp/response.cpp
+    src/protocol/gkwp/json_reader.cpp
+    src/protocol/http/http_channel.cpp
 )
 
 gatekeeper_library(gk_storage
     src/storage/memory_store.cpp
 )
 
+gatekeeper_library(gk_domain
+    src/domain/kv/string_ops.cpp
+    src/domain/kv/string_body.cpp
+    src/domain/kv/key_ops.cpp
+    src/domain/kv/ttl_ops.cpp
+    src/domain/ratelimit/counter_ops.cpp
+    src/domain/quota/reservation_ops.cpp
+)
+target_link_libraries(gk_domain PUBLIC gk_protocol gk_command_names gk_storage)
+
 gatekeeper_library(gk_commands
     src/command/dispatcher.cpp
-    src/command/string_ops.cpp
-    src/command/string_body.cpp
-    src/command/key_ops.cpp
-    src/command/ttl_ops.cpp
-    src/command/counter_ops.cpp
-    src/command/reservation_ops.cpp
 )
-target_link_libraries(gk_commands PUBLIC gk_protocol gk_command_names gk_storage)
+target_link_libraries(gk_commands PUBLIC gk_domain gk_protocol gk_command_names gk_storage)
 
 gatekeeper_library(gk_service
     src/service/processor.cpp
@@ -64,7 +69,6 @@ gatekeeper_library(gk_net
     src/net/client.cpp
     src/net/event_loop.cpp
     src/net/channel.cpp
-    src/net/http_channel.cpp
 )
 target_link_libraries(gk_net PUBLIC gk_protocol gk_log)
 
@@ -87,7 +91,7 @@ endif()
 include(CTest)
 
 if(BUILD_TESTING)
-    add_executable(string_commands_tests tests/command/string_commands_test.cpp)
+    add_executable(string_commands_tests tests/domain/kv/string_commands_test.cpp)
     target_link_libraries(string_commands_tests PRIVATE gk_commands)
     add_test(NAME string_commands_tests COMMAND string_commands_tests)
 
@@ -95,19 +99,19 @@ if(BUILD_TESTING)
     target_link_libraries(hash_table_tests PRIVATE gk_storage)
     add_test(NAME hash_table_tests COMMAND hash_table_tests)
 
-    add_executable(key_commands_tests tests/command/key_commands_test.cpp)
+    add_executable(key_commands_tests tests/domain/kv/key_commands_test.cpp)
     target_link_libraries(key_commands_tests PRIVATE gk_commands)
     add_test(NAME key_commands_tests COMMAND key_commands_tests)
 
-    add_executable(ttl_commands_tests tests/command/ttl_commands_test.cpp)
+    add_executable(ttl_commands_tests tests/domain/kv/ttl_commands_test.cpp)
     target_link_libraries(ttl_commands_tests PRIVATE gk_commands)
     add_test(NAME ttl_commands_tests COMMAND ttl_commands_tests)
 
-    add_executable(counter_commands_tests tests/command/counter_commands_test.cpp)
+    add_executable(counter_commands_tests tests/domain/ratelimit/counter_commands_test.cpp)
     target_link_libraries(counter_commands_tests PRIVATE gk_commands)
     add_test(NAME counter_commands_tests COMMAND counter_commands_tests)
 
-    add_executable(reservation_commands_tests tests/command/reservation_commands_test.cpp)
+    add_executable(reservation_commands_tests tests/domain/quota/reservation_commands_test.cpp)
     target_link_libraries(reservation_commands_tests PRIVATE gk_commands)
     add_test(NAME reservation_commands_tests COMMAND reservation_commands_tests)
 
@@ -124,9 +128,9 @@ if(BUILD_TESTING)
     add_test(NAME options_tests COMMAND options_tests)
 
     add_executable(protocol_tests
-        tests/protocol/frame_decoder_test.cpp
-        tests/protocol/json_request_parser_test.cpp
-        tests/protocol/response_test.cpp
+        tests/protocol/gkwp/frame_decoder_test.cpp
+        tests/protocol/gkwp/json_request_parser_test.cpp
+        tests/protocol/gkwp/response_test.cpp
         tests/command/command_dispatcher_test.cpp
         tests/cli/command_test.cpp
     )
@@ -174,7 +178,7 @@ if(BUILD_TESTING)
                     $<TARGET_FILE:gatekeeper> $<TARGET_FILE:gate>)
 
             add_test(NAME http_api_tests
-                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/net/http_api_test.py
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/protocol/http/http_api_test.py
                     $<TARGET_FILE:gatekeeper>)
 
             add_test(NAME concurrency_rate_limit_tests

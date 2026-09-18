@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gatekeeper/protocol/decoder.h"
+#include "gatekeeper/protocol/gkwp/decoder.h"
 
 #include <cstddef>
 #include <cstdint>

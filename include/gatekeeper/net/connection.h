@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gatekeeper/log/logger.h"
+#include "gatekeeper/core/log/logger.h"
 #include "gatekeeper/net/request_handler.h"
 #include "gatekeeper/net/session.h"
 

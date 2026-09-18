@@ -1,7 +1,7 @@
 ﻿#pragma once
 
-#include "gatekeeper/log/logger.h"
-#include "gatekeeper/net/http_types.h"
+#include "gatekeeper/core/log/logger.h"
+#include "gatekeeper/protocol/http/http_types.h"
 #include "gatekeeper/storage/store.h"
 
 #include <memory>

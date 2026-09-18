@@ -1,6 +1,6 @@
 #include "gatekeeper/net/channel.h"
 #include "gatekeeper/net/event_loop.h"
-#include "gatekeeper/protocol/frame.h"
+#include "gatekeeper/protocol/gkwp/frame.h"
 
 #include <array>
 #include <fcntl.h>

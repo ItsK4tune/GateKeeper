@@ -1,8 +1,8 @@
 ﻿#pragma once
 
-#include "gatekeeper/log/logger.h"
+#include "gatekeeper/core/log/logger.h"
 #include "gatekeeper/net/event_loop.h"
-#include "gatekeeper/net/http_channel.h"
+#include "gatekeeper/protocol/http/http_channel.h"
 #include "gatekeeper/net/request_handler.h"
 
 #include <cstdint>

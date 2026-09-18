@@ -1,7 +1,7 @@
 #include "gatekeeper/net/connection.h"
 #include "gatekeeper/net/error.h"
-#include "gatekeeper/protocol/frame.h"
-#include "gatekeeper/protocol/response.h"
+#include "gatekeeper/protocol/gkwp/frame.h"
+#include "gatekeeper/protocol/gkwp/response.h"
 
 #include <array>
 #include <cerrno>

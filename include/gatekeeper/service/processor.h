@@ -1,8 +1,8 @@
 #pragma once
 
 #include "gatekeeper/command/result.h"
-#include "gatekeeper/log/logger.h"
-#include "gatekeeper/protocol/request.h"
+#include "gatekeeper/core/log/logger.h"
+#include "gatekeeper/protocol/gkwp/request.h"
 
 #include <functional>
 #include <memory>

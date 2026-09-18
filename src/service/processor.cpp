@@ -1,6 +1,6 @@
 ﻿#include "gatekeeper/service/processor.h"
-#include "gatekeeper/protocol/parser.h"
-#include "gatekeeper/protocol/response.h"
+#include "gatekeeper/protocol/gkwp/parser.h"
+#include "gatekeeper/protocol/gkwp/response.h"
 
 #include <stdexcept>
 #include <utility>

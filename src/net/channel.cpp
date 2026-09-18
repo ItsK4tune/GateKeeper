@@ -1,6 +1,6 @@
 #include "gatekeeper/net/channel.h"
-#include "gatekeeper/protocol/frame.h"
-#include "gatekeeper/protocol/response.h"
+#include "gatekeeper/protocol/gkwp/frame.h"
+#include "gatekeeper/protocol/gkwp/response.h"
 
 #include <array>
 #include <cerrno>

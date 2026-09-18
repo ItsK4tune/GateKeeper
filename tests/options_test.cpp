@@ -1,5 +1,5 @@
-#include "gatekeeper/config/cli_config.h"
-#include "gatekeeper/config/server_config.h"
+#include "gatekeeper/core/config/cli_config.h"
+#include "gatekeeper/core/config/server_config.h"
 
 #include <iostream>
 #include <stdexcept>

@@ -1,10 +1,10 @@
 ﻿#include "gatekeeper/command/dispatcher.h"
-#include "gatekeeper/command/counter_ops.h"
-#include "gatekeeper/command/key_ops.h"
+#include "gatekeeper/domain/ratelimit/counter_ops.h"
+#include "gatekeeper/domain/kv/key_ops.h"
 #include "gatekeeper/command/name.h"
-#include "gatekeeper/command/reservation_ops.h"
-#include "gatekeeper/command/string_ops.h"
-#include "gatekeeper/command/ttl_ops.h"
+#include "gatekeeper/domain/quota/reservation_ops.h"
+#include "gatekeeper/domain/kv/string_ops.h"
+#include "gatekeeper/domain/kv/ttl_ops.h"
 #include "gatekeeper/storage/memory_store.h"
 
 #include <stdexcept>

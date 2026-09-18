@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gatekeeper/protocol/error.h"
+#include "gatekeeper/protocol/gkwp/error.h"
 
 #include <string>
 

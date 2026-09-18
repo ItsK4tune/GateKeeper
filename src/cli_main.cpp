@@ -1,6 +1,6 @@
 ﻿#include "gatekeeper/cli/app.h"
-#include "gatekeeper/config/cli_config.h"
-#include "gatekeeper/log/logger.h"
+#include "gatekeeper/core/config/cli_config.h"
+#include "gatekeeper/core/log/logger.h"
 #include "gatekeeper/net/client.h"
 
 #include <iostream>

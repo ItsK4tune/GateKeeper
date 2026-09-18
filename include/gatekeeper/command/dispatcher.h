@@ -1,7 +1,7 @@
 #pragma once
 
 #include "gatekeeper/command/result.h"
-#include "gatekeeper/protocol/request.h"
+#include "gatekeeper/protocol/gkwp/request.h"
 #include "gatekeeper/storage/store.h"
 
 #include <cstddef>
