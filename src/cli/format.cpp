@@ -1,4 +1,4 @@
-#include <cstdint>
+﻿#include <cstdint>
 #include "gatekeeper/cli/format.h"
 #include "gatekeeper/protocol/response.h"
 
@@ -243,7 +243,49 @@ Result FormatResponse(std::string_view gkwp_json)
                       " retry_after_ms=" + std::to_string(retry_val)};
     }
 
-    for (const char* bool_field : {"\"set\":", "\"persisted\":"})
+    // Reservation responses
+    if (gkwp_json.find("\"reserved\":") != std::string_view::npos)
+    {
+        std::string res_id;
+        auto id_pos = gkwp_json.find("\"reservation_id\":");
+        if (id_pos != std::string_view::npos)
+        {
+            id_pos += 17;
+            ParseJsonString(gkwp_json, id_pos, res_id);
+        }
+        std::int64_t rem = 0;
+        auto rem_pos = gkwp_json.find("\"remaining\":");
+        if (rem_pos != std::string_view::npos)
+        {
+            rem_pos += 12;
+            ParseNumber(gkwp_json, rem_pos, rem);
+        }
+        return Result{"reserved=1 reservation_id=" + protocol::QuoteJson(res_id) + " remaining=" + std::to_string(rem)};
+    }
+
+    if (gkwp_json.find("\"committed\":") != std::string_view::npos)
+    {
+        std::int64_t act = 0, ref = 0, rem = 0;
+        auto act_pos = gkwp_json.find("\"actual_amount\":");
+        if (act_pos != std::string_view::npos) { act_pos += 16; ParseNumber(gkwp_json, act_pos, act); }
+        auto ref_pos = gkwp_json.find("\"refunded\":");
+        if (ref_pos != std::string_view::npos) { ref_pos += 11; ParseNumber(gkwp_json, ref_pos, ref); }
+        auto rem_pos = gkwp_json.find("\"remaining\":");
+        if (rem_pos != std::string_view::npos) { rem_pos += 12; ParseNumber(gkwp_json, rem_pos, rem); }
+        return Result{"committed=1 actual_amount=" + std::to_string(act) + " refunded=" + std::to_string(ref) + " remaining=" + std::to_string(rem)};
+    }
+
+    if (gkwp_json.find("\"rolled_back\":") != std::string_view::npos)
+    {
+        std::int64_t ref = 0, rem = 0;
+        auto ref_pos = gkwp_json.find("\"refunded\":");
+        if (ref_pos != std::string_view::npos) { ref_pos += 11; ParseNumber(gkwp_json, ref_pos, ref); }
+        auto rem_pos = gkwp_json.find("\"remaining\":");
+        if (rem_pos != std::string_view::npos) { rem_pos += 12; ParseNumber(gkwp_json, rem_pos, rem); }
+        return Result{"rolled_back=1 refunded=" + std::to_string(ref) + " remaining=" + std::to_string(rem)};
+    }
+
+    for (const char* bool_field : {"\"set\":", "\"persisted\":", "\"initialized\":"})
     {
         auto pos = gkwp_json.find(bool_field);
         if (pos != std::string_view::npos)
@@ -273,7 +315,7 @@ Result FormatResponse(std::string_view gkwp_json)
         }
     }
 
-    for (const char* int_field : {"\"deleted\":", "\"count\":", "\"size\":", "\"ttl_seconds\":", "\"ttl_ms\":"})
+    for (const char* int_field : {"\"deleted\":", "\"count\":", "\"size\":", "\"ttl_seconds\":", "\"ttl_ms\":", "\"balance\":"})
     {
         auto pos = gkwp_json.find(int_field);
         if (pos != std::string_view::npos)

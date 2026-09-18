@@ -1,4 +1,4 @@
-#include "gatekeeper/storage/memory_store.h"
+﻿#include "gatekeeper/storage/memory_store.h"
 
 #include <chrono>
 #include <limits>
@@ -301,24 +301,6 @@ bool MemoryStore::Persist(std::string_view key)
     return true;
 }
 
-std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
-{
-    const std::lock_guard lock(mutex_);
-    const auto now = CurrentTimeMs();
-    std::vector<std::string> expired_keys;
-    entries_.ForEach([&](const std::string& k, const Entry& e) {
-        if (expired_keys.size() < sample_limit && e.meta.IsExpired(now))
-        {
-            expired_keys.push_back(k);
-        }
-    });
-    for (const auto& k : expired_keys)
-    {
-        entries_.Erase(k);
-    }
-    return expired_keys.size();
-}
-
 IncrResult MemoryStore::IncrBy(std::string_view key, std::int64_t delta, std::uint64_t init_ttl_ms)
 {
     const std::lock_guard lock(mutex_);
@@ -435,6 +417,247 @@ RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit
     }
 
     return {true, false, 0, retry_after, {}, {}};
+}
+
+ReservationResult MemoryStore::ReserveQuota(std::string_view key, std::uint64_t amount, std::uint64_t ttl_ms)
+{
+    if (amount == 0)
+    {
+        return {false, false, "", 0, "INVALID_ARGUMENTS", "amount must be greater than zero"};
+    }
+    if (ttl_ms == 0)
+    {
+        return {false, false, "", 0, "INVALID_ARGUMENTS", "ttl_ms must be greater than zero"};
+    }
+
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto key_str = std::string(key);
+    auto* existing = entries_.Find(key_str);
+    if (existing != nullptr && existing->meta.IsExpired(now))
+    {
+        entries_.Erase(key_str);
+        existing = nullptr;
+    }
+
+    if (existing == nullptr)
+    {
+        return {true, false, "", 0, "INSUFFICIENT_QUOTA", "quota key does not exist"};
+    }
+
+    std::uint64_t balance = 0;
+    try
+    {
+        std::size_t idx = 0;
+        balance = std::stoull(existing->value, &idx);
+        if (idx != existing->value.size())
+        {
+            return {false, false, "", 0, "ERR_NOT_AN_INTEGER", "quota balance is not an integer"};
+        }
+    }
+    catch (...)
+    {
+        return {false, false, "", 0, "ERR_NOT_AN_INTEGER", "quota balance is not an integer"};
+    }
+
+    if (balance < amount)
+    {
+        return {true, false, "", balance, "INSUFFICIENT_QUOTA", "insufficient quota balance"};
+    }
+
+    balance -= amount;
+    existing->value = std::to_string(balance);
+
+    const auto res_id = "res_" + std::to_string(now) + "_" + std::to_string(next_reservation_seq_++);
+    Reservation res{res_id, key_str, amount, now, now + ttl_ms};
+    reservations_.Insert(res_id, std::move(res));
+
+    return {true, true, res_id, balance, {}, {}};
+}
+
+CommitResult MemoryStore::CommitQuota(std::string_view key, std::string_view reservation_id, std::uint64_t actual_amount)
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto res_id_str = std::string(reservation_id);
+    auto* res = reservations_.Find(res_id_str);
+
+    if (res == nullptr || res->key != key)
+    {
+        return {false, false, 0, 0, 0, "RESERVATION_NOT_FOUND", "reservation not found or key mismatch"};
+    }
+
+    if (res->IsExpired(now))
+    {
+        auto* target = entries_.Find(res->key);
+        if (target != nullptr)
+        {
+            try
+            {
+                auto b = std::stoull(target->value);
+                b += res->amount;
+                target->value = std::to_string(b);
+            }
+            catch (...)
+            {
+                target->value = std::to_string(res->amount);
+            }
+        }
+        reservations_.Erase(res_id_str);
+        return {false, false, 0, 0, 0, "RESERVATION_EXPIRED", "reservation expired and was automatically rolled back"};
+    }
+
+    const auto reserved_amount = res->amount;
+    const auto key_str = res->key;
+    reservations_.Erase(res_id_str);
+
+    auto* target = entries_.Find(key_str);
+    std::uint64_t balance = 0;
+    if (target != nullptr)
+    {
+        try
+        {
+            balance = std::stoull(target->value);
+        }
+        catch (...)
+        {
+            balance = 0;
+        }
+    }
+
+    std::uint64_t refunded = 0;
+    if (actual_amount <= reserved_amount)
+    {
+        refunded = reserved_amount - actual_amount;
+        balance += refunded;
+    }
+    else
+    {
+        const auto extra = actual_amount - reserved_amount;
+        if (balance >= extra)
+        {
+            balance -= extra;
+        }
+        else
+        {
+            balance = 0;
+        }
+    }
+
+    if (target != nullptr)
+    {
+        target->value = std::to_string(balance);
+    }
+    else
+    {
+        Entry entry{key_str, std::to_string(balance), EntryMetadata{DataType::String, now, 0}};
+        entries_.Insert(key_str, std::move(entry));
+    }
+
+    return {true, true, actual_amount, refunded, balance, {}, {}};
+}
+
+RollbackResult MemoryStore::RollbackQuota(std::string_view key, std::string_view reservation_id)
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto res_id_str = std::string(reservation_id);
+    auto* res = reservations_.Find(res_id_str);
+
+    if (res == nullptr || res->key != key)
+    {
+        return {false, false, 0, 0, "RESERVATION_NOT_FOUND", "reservation not found or key mismatch"};
+    }
+
+    const auto refund_amount = res->amount;
+    const auto key_str = res->key;
+    const bool was_expired = res->IsExpired(now);
+    reservations_.Erase(res_id_str);
+
+    auto* target = entries_.Find(key_str);
+    std::uint64_t balance = 0;
+    if (target != nullptr)
+    {
+        try
+        {
+            balance = std::stoull(target->value);
+        }
+        catch (...)
+        {
+            balance = 0;
+        }
+    }
+
+    if (!was_expired)
+    {
+        balance += refund_amount;
+        if (target != nullptr)
+        {
+            target->value = std::to_string(balance);
+        }
+        else
+        {
+            Entry entry{key_str, std::to_string(balance), EntryMetadata{DataType::String, now, 0}};
+            entries_.Insert(key_str, std::move(entry));
+        }
+    }
+
+    return {true, true, refund_amount, balance, {}, {}};
+}
+
+std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+
+    std::vector<std::string> expired_keys;
+    entries_.ForEach([&](const std::string& k, const Entry& e) {
+        if (expired_keys.size() < sample_limit && e.meta.IsExpired(now))
+        {
+            expired_keys.push_back(k);
+        }
+    });
+    for (const auto& k : expired_keys)
+    {
+        entries_.Erase(k);
+    }
+
+    std::vector<std::string> expired_reservations;
+    reservations_.ForEach([&](const std::string& id, const Reservation& res) {
+        if (expired_reservations.size() < sample_limit && res.IsExpired(now))
+        {
+            expired_reservations.push_back(id);
+        }
+    });
+    for (const auto& id : expired_reservations)
+    {
+        auto* res = reservations_.Find(id);
+        if (res != nullptr)
+        {
+            auto* target = entries_.Find(res->key);
+            if (target != nullptr)
+            {
+                try
+                {
+                    auto bal = std::stoull(target->value);
+                    bal += res->amount;
+                    target->value = std::to_string(bal);
+                }
+                catch (...)
+                {
+                    target->value = std::to_string(res->amount);
+                }
+            }
+            else
+            {
+                Entry entry{res->key, std::to_string(res->amount), EntryMetadata{DataType::String, now, 0}};
+                entries_.Insert(res->key, std::move(entry));
+            }
+            reservations_.Erase(id);
+        }
+    }
+
+    return expired_keys.size() + expired_reservations.size();
 }
 
 }

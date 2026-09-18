@@ -1,7 +1,8 @@
-#include "gatekeeper/command/dispatcher.h"
+﻿#include "gatekeeper/command/dispatcher.h"
 #include "gatekeeper/command/counter_ops.h"
 #include "gatekeeper/command/key_ops.h"
 #include "gatekeeper/command/name.h"
+#include "gatekeeper/command/reservation_ops.h"
 #include "gatekeeper/command/string_ops.h"
 #include "gatekeeper/command/ttl_ops.h"
 #include "gatekeeper/storage/memory_store.h"
@@ -31,6 +32,7 @@ Dispatcher::Dispatcher(std::unique_ptr<storage::Store> store)
     RegisterKeyOps(*this, *store_);
     RegisterTtlOps(*this, *store_);
     RegisterCounterOps(*this, *store_);
+    RegisterReservationOps(*this, *store_);
 }
 
 Dispatcher::~Dispatcher() = default;

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "gatekeeper/storage/entry.h"
 #include "gatekeeper/storage/hash_table.h"
@@ -38,9 +38,15 @@ public:
     IncrResult IncrBy(std::string_view key, std::int64_t delta, std::uint64_t init_ttl_ms = 0) override;
     RateLimitResult RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms) override;
 
+    ReservationResult ReserveQuota(std::string_view key, std::uint64_t amount, std::uint64_t ttl_ms) override;
+    CommitResult CommitQuota(std::string_view key, std::string_view reservation_id, std::uint64_t actual_amount) override;
+    RollbackResult RollbackQuota(std::string_view key, std::string_view reservation_id) override;
+
 private:
     mutable std::mutex mutex_;
     mutable HashTable<std::string, Entry> entries_;
+    mutable HashTable<std::string, Reservation> reservations_;
+    mutable std::uint64_t next_reservation_seq_{1};
 };
 
 }
