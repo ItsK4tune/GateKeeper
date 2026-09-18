@@ -1,6 +1,7 @@
-﻿#include "gatekeeper/storage/memory_store.h"
+#include "gatekeeper/storage/memory_store.h"
 
 #include <chrono>
+#include <limits>
 #include <utility>
 
 namespace gatekeeper::storage
@@ -186,17 +187,28 @@ std::pair<std::size_t, std::vector<std::string>> MemoryStore::Scan(std::size_t c
 {
     const std::lock_guard lock(mutex_);
     const auto now = CurrentTimeMs();
-    auto [next_cursor, keys] = entries_.Scan(cursor, count);
-    std::vector<std::string> active_keys;
-    for (const auto& k : keys)
-    {
-        auto* e = entries_.Find(k);
-        if (e != nullptr && !e->meta.IsExpired(now))
+    std::vector<std::string> current_keys;
+    entries_.ForEach([&](const std::string& key, const Entry& entry) {
+        if (!entry.meta.IsExpired(now))
         {
-            active_keys.push_back(k);
+            current_keys.push_back(key);
         }
+    });
+
+    if (cursor >= current_keys.size())
+    {
+        return {0, {}};
     }
-    return {next_cursor, std::move(active_keys)};
+
+    std::vector<std::string> batch;
+    const std::size_t end = std::min(cursor + count, current_keys.size());
+    for (std::size_t i = cursor; i < end; ++i)
+    {
+        batch.push_back(current_keys[i]);
+    }
+
+    std::size_t next_cursor = end >= current_keys.size() ? 0 : end;
+    return {next_cursor, std::move(batch)};
 }
 
 bool MemoryStore::Expire(std::string_view key, std::uint64_t ttl_ms)
@@ -212,6 +224,11 @@ bool MemoryStore::Expire(std::string_view key, std::uint64_t ttl_ms)
             entries_.Erase(key_str);
         }
         return false;
+    }
+    if (ttl_ms == 0)
+    {
+        entries_.Erase(key_str);
+        return true;
     }
     existing->meta.expire_at_ms = now + ttl_ms;
     return true;
@@ -236,7 +253,8 @@ std::int64_t MemoryStore::Ttl(std::string_view key) const
     {
         return -1;
     }
-    return static_cast<std::int64_t>((existing->meta.expire_at_ms - now + 999) / 1000);
+    const auto remaining_ms = existing->meta.expire_at_ms - now;
+    return static_cast<std::int64_t>((remaining_ms + 999) / 1000);
 }
 
 std::int64_t MemoryStore::Pttl(std::string_view key) const
@@ -299,6 +317,124 @@ std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
         entries_.Erase(k);
     }
     return expired_keys.size();
+}
+
+IncrResult MemoryStore::IncrBy(std::string_view key, std::int64_t delta, std::uint64_t init_ttl_ms)
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto key_str = std::string(key);
+    auto* existing = entries_.Find(key_str);
+    if (existing != nullptr && existing->meta.IsExpired(now))
+    {
+        entries_.Erase(key_str);
+        existing = nullptr;
+    }
+
+    if (existing == nullptr)
+    {
+        const auto expire_at = init_ttl_ms > 0 ? now + init_ttl_ms : 0;
+        Entry entry{key_str, std::to_string(delta), EntryMetadata{DataType::String, now, expire_at}};
+        entries_.Insert(key_str, std::move(entry));
+        return {true, delta, {}, {}};
+    }
+
+    if (existing->meta.type != DataType::String)
+    {
+        return {false, 0, "WRONGTYPE", "Operation against a key holding the wrong kind of value"};
+    }
+
+    std::int64_t current_val = 0;
+    try
+    {
+        std::size_t idx = 0;
+        current_val = std::stoll(existing->value, &idx);
+        if (idx != existing->value.size())
+        {
+            return {false, 0, "ERR_NOT_AN_INTEGER", "value is not an integer or out of range"};
+        }
+    }
+    catch (...)
+    {
+        return {false, 0, "ERR_NOT_AN_INTEGER", "value is not an integer or out of range"};
+    }
+
+    if ((delta > 0 && current_val > std::numeric_limits<std::int64_t>::max() - delta) ||
+        (delta < 0 && current_val < std::numeric_limits<std::int64_t>::min() - delta))
+    {
+        return {false, 0, "ERR_OVERFLOW", "increment or decrement would overflow"};
+    }
+
+    current_val += delta;
+    existing->value = std::to_string(current_val);
+    return {true, current_val, {}, {}};
+}
+
+RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms)
+{
+    if (limit == 0)
+    {
+        return {false, false, 0, 0, "INVALID_ARGUMENTS", "limit must be greater than zero"};
+    }
+    if (window_ms == 0)
+    {
+        return {false, false, 0, 0, "INVALID_ARGUMENTS", "window_ms must be greater than zero"};
+    }
+
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto key_str = std::string(key);
+    auto* existing = entries_.Find(key_str);
+    if (existing != nullptr && existing->meta.IsExpired(now))
+    {
+        entries_.Erase(key_str);
+        existing = nullptr;
+    }
+
+    if (existing == nullptr)
+    {
+        const auto expire_at = now + window_ms;
+        Entry entry{key_str, "1", EntryMetadata{DataType::String, now, expire_at}};
+        entries_.Insert(key_str, std::move(entry));
+        const auto remaining = (limit > 1) ? (limit - 1) : 0;
+        return {true, true, remaining, 0, {}, {}};
+    }
+
+    std::uint64_t current_count = 0;
+    try
+    {
+        std::size_t idx = 0;
+        current_count = std::stoull(existing->value, &idx);
+        if (idx != existing->value.size())
+        {
+            return {false, false, 0, 0, "ERR_NOT_AN_INTEGER", "value is not an integer"};
+        }
+    }
+    catch (...)
+    {
+        return {false, false, 0, 0, "ERR_NOT_AN_INTEGER", "value is not an integer"};
+    }
+
+    std::uint64_t retry_after = 0;
+    if (existing->meta.expire_at_ms > now)
+    {
+        retry_after = existing->meta.expire_at_ms - now;
+    }
+    else
+    {
+        existing->meta.expire_at_ms = now + window_ms;
+        retry_after = window_ms;
+    }
+
+    if (current_count < limit)
+    {
+        ++current_count;
+        existing->value = std::to_string(current_count);
+        const auto remaining = limit - current_count;
+        return {true, true, remaining, 0, {}, {}};
+    }
+
+    return {true, false, 0, retry_after, {}, {}};
 }
 
 }

@@ -31,4 +31,22 @@ struct Entry
     EntryMetadata meta;
 };
 
+struct IncrResult
+{
+    bool ok{false};
+    std::int64_t value{0};
+    std::string error_code;
+    std::string error_message;
+};
+
+struct RateLimitResult
+{
+    bool ok{true};
+    bool allowed{false};
+    std::uint64_t remaining{0};
+    std::uint64_t retry_after_ms{0};
+    std::string error_code;
+    std::string error_message;
+};
+
 }

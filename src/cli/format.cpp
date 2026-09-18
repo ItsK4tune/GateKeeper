@@ -1,10 +1,10 @@
+#include <cstdint>
 #include "gatekeeper/cli/format.h"
 #include "gatekeeper/protocol/response.h"
 
 #include <cctype>
-#include <cstdint>
-#include <string>
-#include <string_view>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
 namespace gatekeeper::cli
@@ -217,6 +217,32 @@ Result FormatResponse(std::string_view gkwp_json)
         return Result{"(nil)"};
     }
 
+    // Rate limit output formatting
+    auto allowed_pos = gkwp_json.find("\"allowed\":");
+    if (allowed_pos != std::string_view::npos)
+    {
+        allowed_pos += 10;
+        bool allowed_val = false;
+        ParseBool(gkwp_json, allowed_pos, allowed_val);
+        std::int64_t remaining_val = 0;
+        auto rem_pos = gkwp_json.find("\"remaining\":");
+        if (rem_pos != std::string_view::npos)
+        {
+            rem_pos += 12;
+            ParseNumber(gkwp_json, rem_pos, remaining_val);
+        }
+        std::int64_t retry_val = 0;
+        auto ret_pos = gkwp_json.find("\"retry_after_ms\":");
+        if (ret_pos != std::string_view::npos)
+        {
+            ret_pos += 17;
+            ParseNumber(gkwp_json, ret_pos, retry_val);
+        }
+        return Result{"allowed=" + std::string(allowed_val ? "1" : "0") +
+                      " remaining=" + std::to_string(remaining_val) +
+                      " retry_after_ms=" + std::to_string(retry_val)};
+    }
+
     for (const char* bool_field : {"\"set\":", "\"persisted\":"})
     {
         auto pos = gkwp_json.find(bool_field);
@@ -239,6 +265,11 @@ Result FormatResponse(std::string_view gkwp_json)
         if (ParseJsonString(gkwp_json, val_pos, value))
         {
             return Result{protocol::QuoteJson(value)};
+        }
+        std::int64_t num = 0;
+        if (ParseNumber(gkwp_json, val_pos, num))
+        {
+            return Result{"(integer) " + std::to_string(num)};
         }
     }
 

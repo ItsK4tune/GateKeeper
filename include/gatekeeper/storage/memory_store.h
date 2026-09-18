@@ -35,6 +35,9 @@ public:
     bool Persist(std::string_view key) override;
     std::size_t PurgeExpired(std::size_t sample_limit) override;
 
+    IncrResult IncrBy(std::string_view key, std::int64_t delta, std::uint64_t init_ttl_ms = 0) override;
+    RateLimitResult RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms) override;
+
 private:
     mutable std::mutex mutex_;
     mutable HashTable<std::string, Entry> entries_;

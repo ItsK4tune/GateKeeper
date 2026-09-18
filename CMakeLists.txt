@@ -46,6 +46,7 @@ gatekeeper_library(gk_commands
     src/command/string_body.cpp
     src/command/key_ops.cpp
     src/command/ttl_ops.cpp
+    src/command/counter_ops.cpp
 )
 target_link_libraries(gk_commands PUBLIC gk_protocol gk_command_names gk_storage)
 
@@ -98,6 +99,10 @@ if(BUILD_TESTING)
     add_executable(ttl_commands_tests tests/command/ttl_commands_test.cpp)
     target_link_libraries(ttl_commands_tests PRIVATE gk_commands)
     add_test(NAME ttl_commands_tests COMMAND ttl_commands_tests)
+
+    add_executable(counter_commands_tests tests/command/counter_commands_test.cpp)
+    target_link_libraries(counter_commands_tests PRIVATE gk_commands)
+    add_test(NAME counter_commands_tests COMMAND counter_commands_tests)
 
     add_executable(concurrent_clients_tests tests/net/concurrent_clients_test.cpp)
     target_link_libraries(concurrent_clients_tests PRIVATE gk_net gk_storage)

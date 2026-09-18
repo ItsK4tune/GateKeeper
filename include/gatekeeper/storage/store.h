@@ -40,6 +40,9 @@ public:
     virtual std::int64_t Pttl(std::string_view key) const = 0;
     virtual bool Persist(std::string_view key) = 0;
     virtual std::size_t PurgeExpired(std::size_t sample_limit) = 0;
+
+    virtual IncrResult IncrBy(std::string_view key, std::int64_t delta, std::uint64_t init_ttl_ms = 0) = 0;
+    virtual RateLimitResult RateLimit(std::string_view key, std::uint64_t limit, std::uint64_t window_ms) = 0;
 };
 
 }
