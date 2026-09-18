@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**", "refactor/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Build, Test & Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 python3 curl
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: sdk/go/go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-13
+
+      - name: Build GateKeeper & Tests
+        run: ninja -C build
+
+      - name: Run CTest Suite
+        run: ctest --test-dir build --output-on-failure --parallel 2
+
+      - name: Start GateKeeper Service in Background
+        run: |
+          ./build/gatekeeper --port 63779 --http-port 8080 --log terminal > /tmp/gatekeeper.log 2>&1 &
+          sleep 2
+          curl -f http://localhost:8080/healthz
+
+      - name: Run Go SDK Tests
+        run: |
+          cd sdk/go
+          go test -v -race ./...
+
+      - name: Run Node.js SDK Tests
+        run: |
+          cd sdk/nodejs
+          node test.js
+
+      - name: Run Python Concurrency Stress Tests
+        run: |
+          python3 tests/stress/concurrency_rate_limit_test.py ./build/gatekeeper
+          python3 tests/stress/auto_rollback_test.py ./build/gatekeeper

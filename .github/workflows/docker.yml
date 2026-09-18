@@ -1,0 +1,52 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "include/**"
+      - "src/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "include/**"
+      - "src/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/docker.yml"
+
+jobs:
+  docker-verify:
+    name: Build & Verify Docker Container
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: gatekeeper:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify Container Startup & Healthcheck
+        run: |
+          docker run -d --name gk -p 63779:63779 -p 8080:8080 gatekeeper:ci
+          sleep 3
+          curl -f http://localhost:8080/healthz
+          docker stop gk
+          docker rm gk

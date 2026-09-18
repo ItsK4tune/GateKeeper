@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Release Binaries & Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 tar
+
+      - name: Configure CMake for Release
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_CXX_COMPILER=g++-13
+
+      - name: Compile & Strip Binaries
+        run: |
+          ninja -C build gatekeeper gate
+          strip build/gatekeeper build/gate
+
+      - name: Package Release Archive
+        run: |
+          mkdir -p dist
+          TAG_NAME="${GITHUB_REF_NAME}"
+          ARCHIVE_NAME="gatekeeper-${TAG_NAME}-linux-amd64.tar.gz"
+          tar -czvf "dist/${ARCHIVE_NAME}" -C build gatekeeper gate
+          cd dist
+          sha256sum "${ARCHIVE_NAME}" > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false
