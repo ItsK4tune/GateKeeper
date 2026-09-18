@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/protocol/frame.h"
+#include "gatekeeper/protocol/frame.h"
 #include "gatekeeper/protocol/decoder.h"
 
 #include <cassert>
@@ -12,7 +12,7 @@ void TestDecoderEmitsAFrameSplitAcrossTcpReads()
 {
     const auto packet = gatekeeper::protocol::EncodeFrame(R"({"id":"request-1","op":"PING","body":{}})");
     gatekeeper::protocol::Decoder decoder;
-    gatekeeper::protocol::ProtocolError error;
+    gatekeeper::protocol::Error error;
     std::vector<std::string> payloads;
 
     assert(decoder.Push(std::span(packet.data(), 2), payloads, error));
@@ -30,7 +30,7 @@ void TestDecoderEmitsTwoPipelinedFrames()
     bytes.insert(bytes.end(), second.begin(), second.end());
 
     gatekeeper::protocol::Decoder decoder;
-    gatekeeper::protocol::ProtocolError error;
+    gatekeeper::protocol::Error error;
     std::vector<std::string> payloads;
 
     assert(decoder.Push(bytes, payloads, error));
@@ -42,7 +42,7 @@ void TestDecoderEmitsTwoPipelinedFrames()
 void TestDecoderRejectsAnOversizedFrame()
 {
     gatekeeper::protocol::Decoder decoder;
-    gatekeeper::protocol::ProtocolError error;
+    gatekeeper::protocol::Error error;
     std::vector<std::string> payloads;
     const std::vector<std::uint8_t> header{0x00, 0x10, 0x00, 0x01};
 

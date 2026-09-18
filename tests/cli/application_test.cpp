@@ -64,7 +64,7 @@ void TestCommandsAndExtension()
     Require(registry.Execute("missing").exit_code != 0, "unknown command accepted");
     Require(requests.size() == count, "invalid command reached transport");
     registry.Register("Echo", "Return arguments", [](const auto& arguments) {
-        return gatekeeper::cli::CommandResult{arguments.at(0)};
+        return gatekeeper::cli::Result{arguments.at(0)};
     });
     Require(registry.Execute("eChO DuOnG").output == "DuOnG", "argument case changed");
     Require(registry.Execute("help").output.find("ECHO - Return arguments") != std::string::npos,
@@ -141,9 +141,9 @@ void TestSuggestions()
     Require(registry.Execute("hlep").output.find("Did you mean: HELP?") != std::string::npos, "missing HELP suggestion");
     Require(registry.Execute("xxxxxxxxxxxxxxxx").output.find("Did you mean") == std::string::npos, "unrelated suggestion");
     Require(registry.Execute(std::string(10000, 'x')).exit_code != 0, "long unknown operation accepted");
-    registry.Register("PONG", "Test extension", [](const auto&) { return gatekeeper::cli::CommandResult{}; });
-    registry.Register("PANG", "Test extension", [](const auto&) { return gatekeeper::cli::CommandResult{}; });
-    registry.Register("PUNG", "Test extension", [](const auto&) { return gatekeeper::cli::CommandResult{}; });
+    registry.Register("PONG", "Test extension", [](const auto&) { return gatekeeper::cli::Result{}; });
+    registry.Register("PANG", "Test extension", [](const auto&) { return gatekeeper::cli::Result{}; });
+    registry.Register("PUNG", "Test extension", [](const auto&) { return gatekeeper::cli::Result{}; });
     const auto result = registry.Execute("peng");
     Require(result.output.find("Did you mean: PANG, PING, PONG?") != std::string::npos, "suggestion ranking or limit failed");
     Require(requests == 0, "suggestions executed remote commands");

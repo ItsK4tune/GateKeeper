@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/protocol/error.h"
 
@@ -19,7 +19,5 @@ public:
 private:
     std::vector<std::uint8_t> buffer_;
 };
-
-using FrameDecoder = Decoder;
 
 }

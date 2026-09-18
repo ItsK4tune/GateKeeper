@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/service/processor.h"
+#include "gatekeeper/service/processor.h"
 #include "gatekeeper/command/dispatcher.h"
 
 #include <iostream>
@@ -26,7 +26,7 @@ int main()
         dispatcher.Register("CUSTOM", [&calls](const auto& request) {
             ++calls;
             Require(request.body_json == R"({"key":"Value"})", "dispatcher modified body");
-            return gatekeeper::command::DispatchResult{true, R"({"custom":true})", {}};
+            return gatekeeper::command::Result{true, R"({"custom":true})", {}};
         });
         gatekeeper::service::Processor processor([&dispatcher](const auto& request) {
             return dispatcher.Dispatch(request);
@@ -43,7 +43,7 @@ int main()
         bool duplicate_rejected = false;
         try
         {
-            dispatcher.Register("ping", [](const auto&) { return gatekeeper::command::DispatchResult{}; });
+            dispatcher.Register("ping", [](const auto&) { return gatekeeper::command::Result{}; });
         }
         catch (const std::invalid_argument&)
         {

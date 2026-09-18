@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "gatekeeper/config/arguments.h"
 #include "gatekeeper/log/logger.h"
@@ -12,6 +12,7 @@ namespace gatekeeper::config
 struct ServerConfig
 {
     int port = kDefaultPort;
+    int http_port = 0;
     bool show_help = false;
     log::Mode log_mode = log::Mode::None;
     std::string log_dir;
@@ -21,9 +22,4 @@ struct ServerConfig
     static std::string_view Usage();
 };
 
-}
-
-namespace gatekeeper::service
-{
-using Options = config::ServerConfig;
 }

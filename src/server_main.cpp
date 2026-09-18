@@ -1,8 +1,9 @@
-#include "gatekeeper/config/server_config.h"
+﻿#include "gatekeeper/config/server_config.h"
 #include "gatekeeper/command/dispatcher.h"
 #include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/server.h"
 #include "gatekeeper/service/processor.h"
+#include "gatekeeper/service/http_service.h"
 
 #include <iostream>
 #include <string>
@@ -23,6 +24,8 @@ int main(int argc, char* argv[])
         gatekeeper::service::Processor processor([&dispatcher](const auto& request) {
             return dispatcher.Dispatch(request);
         }, logger);
+        gatekeeper::service::HttpService http_service(dispatcher.GetStore(), logger);
+
         gatekeeper::net::Server server(
             config.port,
             [&processor](std::string_view payload) {
@@ -36,6 +39,10 @@ int main(int argc, char* argv[])
                 {
                     logger->Info("Active expiration purged " + std::to_string(purged) + " keys");
                 }
+            },
+            config.http_port,
+            [&http_service](const auto& req) {
+                return http_service.Handle(req);
             });
         server.Run();
     }

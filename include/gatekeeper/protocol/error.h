@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 
@@ -10,7 +10,5 @@ struct Error
     std::string code;
     std::string message;
 };
-
-using ProtocolError = Error;
 
 }

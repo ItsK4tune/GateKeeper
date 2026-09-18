@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/protocol/error.h"
 #include "gatekeeper/protocol/request.h"
@@ -13,7 +13,5 @@ class Parser
 public:
     bool Parse(std::string_view payload, Request& request, Error& error) const;
 };
-
-using JsonRequestParser = Parser;
 
 }

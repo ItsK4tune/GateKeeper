@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/cli/registry.h"
 
@@ -23,7 +23,5 @@ private:
     const Registry& commands_;
     SessionStarter session_starter_;
 };
-
-using Application = App;
 
 }

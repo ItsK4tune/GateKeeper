@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/config/arguments.h"
 #include "gatekeeper/log/logger.h"
@@ -22,9 +22,4 @@ struct CliConfig
     static std::string_view Usage();
 };
 
-}
-
-namespace gatekeeper::cli
-{
-using Options = config::CliConfig;
 }

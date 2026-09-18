@@ -1,4 +1,4 @@
-#include "gatekeeper/config/server_config.h"
+﻿#include "gatekeeper/config/server_config.h"
 
 #include <charconv>
 #include <stdexcept>
@@ -12,6 +12,7 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
 {
     ServerConfig config;
     bool has_port = false;
+    bool has_http_port = false;
     bool has_log = false;
     bool has_log_dir = false;
     bool has_timer = false;
@@ -26,6 +27,10 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
         if (argument == "--port" || argument == "-p")
         {
             config.port = config::ParsePort(config::ReadOptionValue(argc, argv, index, "port", has_port));
+        }
+        else if (argument == "--http-port")
+        {
+            config.http_port = config::ParsePort(config::ReadOptionValue(argc, argv, index, "http-port", has_http_port));
         }
         else if (argument == "--log" || argument == "-l")
         {
@@ -78,12 +83,13 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
 
 std::string_view ServerConfig::Usage()
 {
-    return "Usage: gatekeeper [-p port | --port port] [-l mode | --log mode] [-d dir | --log-dir dir] [-t ms | --timer ms] [--help]\n"
-           "  -p, --port     TCP listening port (default: 63779, range: 1..65535)\n"
-           "  -l, --log      Logging mode: none, terminal, file (default: none)\n"
-           "  -d, --log-dir  Directory to write log file (<dir>/log)\n"
-           "  -t, --timer    Periodic timer interval in milliseconds (-1 to disable, default: -1)\n"
-           "  -h, --help     Show this help\n";
+    return "Usage: gatekeeper [-p port | --port port] [--http-port port] [-l mode | --log mode] [-d dir | --log-dir dir] [-t ms | --timer ms] [--help]\n"
+           "  -p, --port       TCP listening port (default: 63779, range: 1..65535)\n"
+           "      --http-port  HTTP API listening port (default: 0 disabled, range: 1..65535)\n"
+           "  -l, --log        Logging mode: none, terminal, file (default: none)\n"
+           "  -d, --log-dir    Directory to write log file (<dir>/log)\n"
+           "  -t, --timer      Periodic timer interval in milliseconds (-1 to disable, default: -1)\n"
+           "  -h, --help       Show this help\n";
 }
 
 }

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/log/logger.h"
 
@@ -34,11 +34,4 @@ private:
     void ReadAll(std::span<std::uint8_t> bytes);
 };
 
-using TcpClient = Client;
-
-}
-
-namespace gatekeeper::cli
-{
-using TcpClient = net::Client;
 }

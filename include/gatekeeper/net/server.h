@@ -2,6 +2,7 @@
 
 #include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/event_loop.h"
+#include "gatekeeper/net/http_channel.h"
 #include "gatekeeper/net/request_handler.h"
 
 #include <cstdint>
@@ -15,21 +16,18 @@ class Server
 {
 public:
     using TimerCallback = EventLoop::TimerCallback;
-    using TickCallback = TimerCallback;
 
     Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(),
-           int timer_interval_ms = -1, TimerCallback timer_callback = nullptr);
+           int timer_interval_ms = -1, TimerCallback timer_callback = nullptr,
+           int http_port = 0, HttpHandler http_handler = nullptr);
     ~Server();
 
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
 
     void SetTimerCallback(int interval_ms, TimerCallback timer_callback);
-    void SetTickHandler(int interval_ms, TimerCallback timer_callback)
-    {
-        SetTimerCallback(interval_ms, std::move(timer_callback));
-    }
     [[nodiscard]] int GetTimerInterval() const noexcept { return timer_interval_ms_; }
+    void SetHttpHandler(int http_port, HttpHandler http_handler);
 
     void Run();
     void Stop();
@@ -41,12 +39,14 @@ private:
     std::shared_ptr<log::Logger> logger_;
     int timer_interval_ms_{-1};
     TimerCallback timer_callback_;
+    int http_port_{0};
+    int http_server_fd_{-1};
+    HttpHandler http_handler_{nullptr};
     std::uint64_t next_session_id_{1};
     std::unique_ptr<EventLoop> loop_;
 
     void SetupSocket();
+    void SetupHttpSocket();
 };
-
-using TcpServer = Server;
 
 }

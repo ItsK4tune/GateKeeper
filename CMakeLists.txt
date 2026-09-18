@@ -46,13 +46,16 @@ gatekeeper_library(gk_commands
     src/command/string_body.cpp
     src/command/key_ops.cpp
     src/command/ttl_ops.cpp
+    src/command/counter_ops.cpp
+    src/command/reservation_ops.cpp
 )
 target_link_libraries(gk_commands PUBLIC gk_protocol gk_command_names gk_storage)
 
 gatekeeper_library(gk_service
     src/service/processor.cpp
+    src/service/http_service.cpp
 )
-target_link_libraries(gk_service PUBLIC gk_config gk_commands gk_log)
+target_link_libraries(gk_service PUBLIC gk_config gk_commands gk_log gk_net)
 
 gatekeeper_library(gk_net
     src/net/error.cpp
@@ -61,6 +64,7 @@ gatekeeper_library(gk_net
     src/net/client.cpp
     src/net/event_loop.cpp
     src/net/channel.cpp
+    src/net/http_channel.cpp
 )
 target_link_libraries(gk_net PUBLIC gk_protocol gk_log)
 
@@ -98,6 +102,14 @@ if(BUILD_TESTING)
     add_executable(ttl_commands_tests tests/command/ttl_commands_test.cpp)
     target_link_libraries(ttl_commands_tests PRIVATE gk_commands)
     add_test(NAME ttl_commands_tests COMMAND ttl_commands_tests)
+
+    add_executable(counter_commands_tests tests/command/counter_commands_test.cpp)
+    target_link_libraries(counter_commands_tests PRIVATE gk_commands)
+    add_test(NAME counter_commands_tests COMMAND counter_commands_tests)
+
+    add_executable(reservation_commands_tests tests/command/reservation_commands_test.cpp)
+    target_link_libraries(reservation_commands_tests PRIVATE gk_commands)
+    add_test(NAME reservation_commands_tests COMMAND reservation_commands_tests)
 
     add_executable(concurrent_clients_tests tests/net/concurrent_clients_test.cpp)
     target_link_libraries(concurrent_clients_tests PRIVATE gk_net gk_storage)
@@ -161,7 +173,19 @@ if(BUILD_TESTING)
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/service/port_test.py
                     $<TARGET_FILE:gatekeeper> $<TARGET_FILE:gate>)
 
-            set_tests_properties(cli_integration_tests network_error_tests service_port_tests PROPERTIES TIMEOUT 30)
+            add_test(NAME http_api_tests
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/net/http_api_test.py
+                    $<TARGET_FILE:gatekeeper>)
+
+            add_test(NAME concurrency_rate_limit_tests
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/concurrency_rate_limit_test.py
+                    $<TARGET_FILE:gatekeeper>)
+
+            add_test(NAME auto_rollback_tests
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/auto_rollback_test.py
+                    $<TARGET_FILE:gatekeeper>)
+
+            set_tests_properties(cli_integration_tests network_error_tests service_port_tests http_api_tests concurrency_rate_limit_tests auto_rollback_tests PROPERTIES TIMEOUT 30)
         endif()
     endif()
 endif()

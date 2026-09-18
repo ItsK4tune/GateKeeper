@@ -1,15 +1,15 @@
-#include "gatekeeper/cli/registry.h"
+﻿#include "gatekeeper/cli/registry.h"
 #include "gatekeeper/cli/format.h"
-#include "gatekeeper/cli/command.h"
 #include "gatekeeper/cli/suggest.h"
+#include "gatekeeper/command/name.h"
 #include "gatekeeper/protocol/response.h"
 
-#include <iomanip>
 #include <cctype>
+#include <iomanip>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
-#include <set>
 
 namespace gatekeeper::cli
 {
@@ -47,6 +47,19 @@ std::string Registry::BuildHelpOutput() const
         {"String Operations", {
             {"GET", "GET key"},
             {"SET", "SET key value [NX|XX] [EX seconds|PX milliseconds]"}
+        }},
+        {"Rate Limiting & Counters", {
+            {"INCR", "INCR key"},
+            {"DECR", "DECR key"},
+            {"INCRBY", "INCRBY key delta [EX seconds|PX milliseconds]"},
+            {"GK.RATE_LIMIT", "GK.RATE_LIMIT key limit window_ms"}
+        }},
+        {"Two-Phase Quota Reservation", {
+            {"GK.RESERVE", "GK.RESERVE key amount ttl_ms"},
+            {"GK.COMMIT", "GK.COMMIT key reservation_id actual_amount"},
+            {"GK.ROLLBACK", "GK.ROLLBACK key reservation_id"},
+            {"GK.QUOTA_INIT", "GK.QUOTA_INIT key amount"},
+            {"GK.QUOTA_GET", "GK.QUOTA_GET key"}
         }},
         {"Key Management", {
             {"DEL", "DEL key [key ...]"},
@@ -161,6 +174,63 @@ Registry::Registry(RequestExecutor execute_remote)
             }
         }
         return FormatResponse(execute_remote("SET", body + "}"));
+    });
+    Register("INCR", "INCR key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: INCR key", false, 1};
+        return FormatResponse(execute_remote("INCR", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
+    });
+    Register("DECR", "DECR key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: DECR key", false, 1};
+        return FormatResponse(execute_remote("DECR", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
+    });
+    Register("INCRBY", "INCRBY key delta [EX seconds|PX milliseconds]", [execute_remote](const Arguments& args) {
+        if (args.size() < 2 || args[0].empty() || args[1].empty())
+            return Result{"INVALID_ARGUMENTS: INCRBY key delta [EX seconds|PX milliseconds]", false, 1};
+        std::string body = "{\"key\":" + protocol::QuoteJson(args[0]) + ",\"delta\":" + args[1];
+        if (args.size() >= 4) {
+            auto flag = NormalizeCommand(args[2]);
+            if (flag == "EX") body += ",\"ttl_seconds\":" + args[3];
+            else if (flag == "PX") body += ",\"ttl_ms\":" + args[3];
+        }
+        body += "}";
+        return FormatResponse(execute_remote("INCRBY", body));
+    });
+    Register("GK.RATE_LIMIT", "GK.RATE_LIMIT key limit window_ms", [execute_remote](const Arguments& args) {
+        if (args.size() != 3 || args[0].empty() || args[1].empty() || args[2].empty())
+            return Result{"INVALID_ARGUMENTS: GK.RATE_LIMIT key limit window_ms", false, 1};
+        return FormatResponse(execute_remote("GK.RATE_LIMIT", "{\"key\":" + protocol::QuoteJson(args[0]) +
+            ",\"limit\":" + args[1] + ",\"window_ms\":" + args[2] + "}"));
+    });
+    Register("GK.RESERVE", "GK.RESERVE key amount ttl_ms", [execute_remote](const Arguments& args) {
+        if (args.size() != 3 || args[0].empty() || args[1].empty() || args[2].empty())
+            return Result{"INVALID_ARGUMENTS: GK.RESERVE key amount ttl_ms", false, 1};
+        return FormatResponse(execute_remote("GK.RESERVE", "{\"key\":" + protocol::QuoteJson(args[0]) +
+            ",\"amount\":" + args[1] + ",\"ttl_ms\":" + args[2] + "}"));
+    });
+    Register("GK.COMMIT", "GK.COMMIT key reservation_id actual_amount", [execute_remote](const Arguments& args) {
+        if (args.size() != 3 || args[0].empty() || args[1].empty() || args[2].empty())
+            return Result{"INVALID_ARGUMENTS: GK.COMMIT key reservation_id actual_amount", false, 1};
+        return FormatResponse(execute_remote("GK.COMMIT", "{\"key\":" + protocol::QuoteJson(args[0]) +
+            ",\"reservation_id\":" + protocol::QuoteJson(args[1]) + ",\"actual_amount\":" + args[2] + "}"));
+    });
+    Register("GK.ROLLBACK", "GK.ROLLBACK key reservation_id", [execute_remote](const Arguments& args) {
+        if (args.size() != 2 || args[0].empty() || args[1].empty())
+            return Result{"INVALID_ARGUMENTS: GK.ROLLBACK key reservation_id", false, 1};
+        return FormatResponse(execute_remote("GK.ROLLBACK", "{\"key\":" + protocol::QuoteJson(args[0]) +
+            ",\"reservation_id\":" + protocol::QuoteJson(args[1]) + "}"));
+    });
+    Register("GK.QUOTA_INIT", "GK.QUOTA_INIT key amount", [execute_remote](const Arguments& args) {
+        if (args.size() != 2 || args[0].empty() || args[1].empty())
+            return Result{"INVALID_ARGUMENTS: GK.QUOTA_INIT key amount", false, 1};
+        return FormatResponse(execute_remote("GK.QUOTA_INIT", "{\"key\":" + protocol::QuoteJson(args[0]) +
+            ",\"amount\":" + args[1] + "}"));
+    });
+    Register("GK.QUOTA_GET", "GK.QUOTA_GET key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: GK.QUOTA_GET key", false, 1};
+        return FormatResponse(execute_remote("GK.QUOTA_GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
     });
     Register("DEL", "DEL key [key ...]", [execute_remote](const Arguments& args) {
         if (args.empty()) return Result{"INVALID_ARGUMENTS: DEL key [key ...]", false, 1};

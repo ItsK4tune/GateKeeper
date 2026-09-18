@@ -38,6 +38,4 @@ private:
     std::map<std::string, Entry> commands_;
 };
 
-using CommandRegistry = Registry;
-
 }

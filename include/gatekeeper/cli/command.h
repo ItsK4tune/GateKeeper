@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/command/name.h"
 #include <string>
@@ -12,8 +12,6 @@ struct Result
     bool exit_requested = false;
     int exit_code = 0;
 };
-
-using CommandResult = Result;
 
 inline std::string NormalizeCommand(std::string command)
 {
