@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/log/logger.h"
 #include "gatekeeper/net/event_loop.h"
@@ -15,7 +15,6 @@ class Server
 {
 public:
     using TimerCallback = EventLoop::TimerCallback;
-    using TickCallback = TimerCallback;
 
     Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(),
            int timer_interval_ms = -1, TimerCallback timer_callback = nullptr);
@@ -25,10 +24,6 @@ public:
     Server& operator=(const Server&) = delete;
 
     void SetTimerCallback(int interval_ms, TimerCallback timer_callback);
-    void SetTickHandler(int interval_ms, TimerCallback timer_callback)
-    {
-        SetTimerCallback(interval_ms, std::move(timer_callback));
-    }
     [[nodiscard]] int GetTimerInterval() const noexcept { return timer_interval_ms_; }
 
     void Run();
@@ -46,7 +41,5 @@ private:
 
     void SetupSocket();
 };
-
-using TcpServer = Server;
 
 }

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/command/result.h"
 #include "gatekeeper/log/logger.h"
@@ -24,7 +24,5 @@ private:
     Dispatch dispatch_;
     std::shared_ptr<log::Logger> logger_;
 };
-
-using RequestProcessor = Processor;
 
 }

@@ -22,8 +22,3 @@ struct ServerConfig
 };
 
 }
-
-namespace gatekeeper::service
-{
-using Options = config::ServerConfig;
-}

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/protocol/error.h"
 
@@ -13,7 +13,5 @@ struct Result
     std::string result_json;
     protocol::Error error;
 };
-
-using DispatchResult = Result;
 
 }

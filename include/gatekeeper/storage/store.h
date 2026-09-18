@@ -42,6 +42,4 @@ public:
     virtual std::size_t PurgeExpired(std::size_t sample_limit) = 0;
 };
 
-using StringStore = Store;
-
 }

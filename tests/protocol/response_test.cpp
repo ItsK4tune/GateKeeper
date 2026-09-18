@@ -7,7 +7,7 @@ namespace
 
 void TestErrorResponseUsesTheProtocolErrorShape()
 {
-    const gatekeeper::protocol::ProtocolError error{"INVALID_REQUEST", "bad input"};
+    const gatekeeper::protocol::Error error{"INVALID_REQUEST", "bad input"};
     const auto payload = gatekeeper::protocol::EncodeErrorResponse("request-1", error);
 
     assert(payload ==

@@ -40,6 +40,4 @@ private:
     mutable HashTable<std::string, Entry> entries_;
 };
 
-using InMemoryStringStore = MemoryStore;
-
 }

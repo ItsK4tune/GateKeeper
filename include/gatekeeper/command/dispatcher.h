@@ -37,6 +37,4 @@ private:
     std::unordered_map<std::string, Handler> commands_;
 };
 
-using CommandDispatcher = Dispatcher;
-
 }

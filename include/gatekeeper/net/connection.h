@@ -32,6 +32,4 @@ private:
     bool SendAll(std::span<const std::uint8_t> bytes);
 };
 
-using ClientConnection = Connection;
-
 }
