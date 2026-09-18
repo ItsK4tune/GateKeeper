@@ -1,0 +1,13 @@
+.git
+.gitignore
+build/
+cmake-build-*/
+.vscode/
+.idea/
+sdk/nodejs/node_modules/
+tests/
+*.log
+*.tmp
+*.o
+*.a
+restructure.sh

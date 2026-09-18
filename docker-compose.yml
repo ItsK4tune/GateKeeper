@@ -1,0 +1,23 @@
+services:
+  gatekeeper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gatekeeper:latest
+    container_name: gatekeeper
+    ports:
+      - "63779:63779"
+      - "8080:8080"
+    command: ["--port", "63779", "--http-port", "8080", "--log", "terminal"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
