@@ -526,7 +526,3 @@ Dành cho các dịch vụ nội bộ (microservices) cần thông lượng cao:
 Mã nguồn triển khai hoàn chỉnh được cung cấp sẵn tại thư mục `sdk/go/` và `sdk/nodejs/`.
 
 ---
-
-## License
-
-GateKeeper is licensed under the [MIT License](LICENSE).
