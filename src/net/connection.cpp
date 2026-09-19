@@ -2,6 +2,7 @@
 #include "gatekeeper/net/error.h"
 #include "gatekeeper/protocol/gkwp/frame.h"
 #include "gatekeeper/protocol/gkwp/response.h"
+#include "gatekeeper/protocol/gkwp2/frame.h"
 
 #include <array>
 #include <cerrno>
@@ -74,25 +75,48 @@ void Connection::Serve()
         }
         session_.AddBytesReceived(static_cast<std::size_t>(received));
         logger_->Debug("Received " + std::to_string(received) + " bytes from client fd=" + std::to_string(client_fd_));
-        std::vector<std::string> payloads;
-        protocol::Error error;
-        if (!session_.Decoder().Push(std::span(buffer.data(), static_cast<std::size_t>(received)), payloads, error))
+        std::vector<InboundMessage> messages;
+        std::string error;
+        if (!session_.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), messages, error))
         {
-            const auto err_response = protocol::EncodeErrorResponse("", error);
-            logger_->Warn("Protocol error from client fd=" + std::to_string(client_fd_) + ": " + error.code + " - " + error.message);
-            logger_->Info("Sending GKWP error response to client fd=" + std::to_string(client_fd_) + ": " + err_response);
-            SendAll(protocol::EncodeFrame(err_response));
+            if (session_.Protocol() == ProtocolType::Gkwp2)
+            {
+                const auto err_frame = protocol::gkwp2::EncodeError(0, 0, "PROTOCOL_ERROR", error, true);
+                logger_->Warn("Protocol error from client fd=" + std::to_string(client_fd_) + ": " + error);
+                SendAll(err_frame);
+            }
+            else
+            {
+                const auto err_response = protocol::EncodeErrorResponse("", {"PROTOCOL_ERROR", error});
+                logger_->Warn("Protocol error from client fd=" + std::to_string(client_fd_) + ": " + error);
+                logger_->Info("Sending GKWP error response to client fd=" + std::to_string(client_fd_) + ": " + err_response);
+                SendAll(protocol::EncodeFrame(err_response));
+            }
             return;
         }
-        for (const auto& payload : payloads)
+        for (const auto& msg : messages)
         {
             session_.IncrementRequests();
-            logger_->Debug("Processing request payload (" + std::to_string(payload.size()) + " bytes) for fd=" + std::to_string(client_fd_));
-            const auto response = handler_(payload);
-            logger_->Info("Sending GKWP response to client fd=" + std::to_string(client_fd_) + ": " + response);
-            if (!SendAll(protocol::EncodeFrame(response)))
+            logger_->Debug("Processing request payload (" + std::to_string(msg.payload.size()) + " bytes) for fd=" + std::to_string(client_fd_));
+            const auto response = handler_(msg.payload);
+            if (msg.protocol == ProtocolType::Gkwp2)
             {
-                return;
+                logger_->Info("Sending GKWP/2 response to client fd=" + std::to_string(client_fd_) + ": " + response);
+                const auto resp_frame = protocol::gkwp2::EncodeResponse(
+                    msg.request_id, msg.stream_id, response,
+                    (msg.flags & protocol::gkwp2::flags::kEndStream) != 0);
+                if (!SendAll(resp_frame))
+                {
+                    return;
+                }
+            }
+            else
+            {
+                logger_->Info("Sending GKWP response to client fd=" + std::to_string(client_fd_) + ": " + response);
+                if (!SendAll(protocol::EncodeFrame(response)))
+                {
+                    return;
+                }
             }
         }
     }

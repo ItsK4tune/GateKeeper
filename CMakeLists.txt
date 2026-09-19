@@ -34,6 +34,9 @@ gatekeeper_library(gk_protocol
     src/protocol/gkwp/parser.cpp
     src/protocol/gkwp/response.cpp
     src/protocol/gkwp/json_reader.cpp
+    src/protocol/gkwp2/frame.cpp
+    src/protocol/gkwp2/decoder.cpp
+    src/protocol/gkwp2/stream_manager.cpp
     src/protocol/http/http_channel.cpp
 )
 
@@ -161,6 +164,9 @@ if(BUILD_TESTING)
         target_compile_options(protocol_tests PRIVATE -UNDEBUG)
     endif()
     add_test(NAME protocol_tests COMMAND protocol_tests)
+    add_executable(gkwp2_tests tests/protocol/gkwp2/gkwp2_tests.cpp)
+    target_link_libraries(gkwp2_tests PRIVATE gk_protocol)
+    add_test(NAME gkwp2_tests COMMAND gkwp2_tests)
 
     add_executable(cli_tests tests/cli/application_test.cpp)
     target_link_libraries(cli_tests PRIVATE gk_cli)
