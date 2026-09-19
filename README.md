@@ -8,7 +8,7 @@ GateKeeper is a high-performance in-memory key-value store, distributed rate-lim
 
 - [English Documentation](#english-documentation)
   - [1. Overview & Architecture](#1-overview--architecture)
-  - [2. GateKeeper Wire Protocol Specification (GKWP/1)](#2-gatekeeper-wire-protocol-specification-gkwp1)
+  - [2. GateKeeper Wire Protocol Specification (GKWP/2 & GKWP/1)](#2-gatekeeper-wire-protocol-specification-gkwp2--gkwp1)
   - [3. Features & Command Reference](#3-features--command-reference)
     - [A. Core Key-Value Operations](#a-core-key-value-operations)
     - [B. TTL and Expiration Commands](#b-ttl-and-expiration-commands)
@@ -21,7 +21,7 @@ GateKeeper is a high-performance in-memory key-value store, distributed rate-lim
   - [5. Client SDKs and Middlewares](#5-client-sdks-and-middlewares)
 - [Tài Liệu Tiếng Việt](#tài-liệu-tiếng-việt)
   - [1. Giới Thiệu & Kiến Trúc Hệ Thống](#1-giới-thiệu--kiến-trúc-hệ-thống)
-  - [2. Đặc Tả Giao Thức GKWP/1](#2-đặc-tả-giao-thức-gkwp1)
+  - [2. Đặc Tả Giao Thức GKWP/2 & GKWP/1](#2-đặc-tả-giao-thức-gkwp2--gkwp1)
   - [3. Tính Năng & Hướng Dẫn Sử Dụng](#3-tính-năng--hướng-dẫn-sử-dụng)
     - [A. Thao Tác Key-Value Cốt Lõi](#a-thao-tác-key-value-cốt-lõi)
     - [B. Nhóm Lệnh TTL và Hết Hạn](#b-nhóm-lệnh-ttl-và-hết-hạn)
@@ -46,7 +46,7 @@ Core architectural components:
 - **Single-Threaded Non-Blocking Event Loop**: Built on Linux epoll multiplexing with edge/level-triggered socket handling and partial read/write buffering. The entire dataset and counter operations reside in memory, executed sequentially without thread context-switching or mutex contention in the execution path.
 - **Zero External Dependencies**: Implemented entirely with the modern C++20 standard library (strict memory safety and RAII), containing a custom RFC 8259 streaming JSON parser (`protocol::JsonReader`) and an internal hash table engine.
 - **Dual-Protocol Listener**: The event loop simultaneously services incoming connections on two independent ports:
-  1. The custom binary length-prefixed GateKeeper Wire Protocol (GKWP/1) on port 63779.
+  1. The custom binary GateKeeper Wire Protocol (GKWP/2) on port 63779.
   2. Native HTTP/1.1 REST API on port 8080.
 - **Hybrid Expiration Model**: Combines lazy eviction (evaluated upon access) with active periodic expiration (random key sampling triggered by an integrated timer on the event loop).
 - **Hybrid Sliding Window Counter**: Rate limiting that eliminates boundary burst while maintaining $O(1)$ memory and $O(1)$ CPU overhead.
@@ -55,13 +55,132 @@ Core architectural components:
 
 ---
 
-### 2. GateKeeper Wire Protocol Specification (GKWP/1)
+### 2. GateKeeper Wire Protocol Specification (GKWP/2 & GKWP/1)
+
+GateKeeper provides two generations of its native binary TCP wire protocol:
+- **GKWP/2 (Current Standard)**: High-performance, strictly-aligned 24-byte binary framed protocol designed for sub-millisecond serialization, out-of-order multiplexing, and zero-copy dispatch.
+- **GKWP/1 [DEPRECATED]**: Legacy 4-byte length-prefixed JSON protocol maintained for backward compatibility.
+
+---
+
+#### GKWP/2 Specification (Current Default)
+
+GKWP/2 is engineered from the ground up to eliminate JSON parsing overhead, string allocations, and framing ambiguity while retaining structured message typing and multiplexing capabilities.
+
+##### Binary Frame Layout
+
+Every transmission across a GKWP/2 connection begins with a fixed 24-byte header in network byte order (big-endian), followed by optional metadata headers and the payload body:
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Magic (0x474B)        |    Version    |    MsgType    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     Flags     |     Opcode    |     Status    |    Reserved   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                 Sequence / Correlation ID                     |
+|                            (64-bit)                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Header Length                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Payload Length                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Header Block (Optional)                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Payload Body (N Bytes)...                 |
++---------------------------------------------------------------+
+```
+
+##### Field Definitions
+
+| Field | Size | Type | Description |
+| :--- | :--- | :--- | :--- |
+| **Magic** | 2 Bytes | `uint16_t` | Constant magic number `0x474B` (ASCII `"GK"`). Used for immediate framing validation. |
+| **Version** | 1 Byte | `uint8_t` | Protocol version. Set to `0x02` for GKWP/2. |
+| **MsgType** | 1 Byte | `uint8_t` | Message type: `0x01` (Request), `0x02` (Response), `0x03` (Heartbeat/Notification). |
+| **Flags** | 1 Byte | `uint8_t` | Bit flags: Bit 0 = Compressed (zstd), Bit 1 = Streaming Chunk, Bit 2 = End of Stream. |
+| **Opcode** | 1 Byte | `uint8_t` | Operation code (e.g., `0x01` PING, `0x02` SET, `0x03` GET, `0x0A` RATE_LIMIT). |
+| **Status** | 1 Byte | `uint8_t` | Status/Return code: `0x00` (OK), `0x01` (Error), `0x02` (Not Found), `0x03` (Rate Limited). |
+| **Reserved** | 1 Byte | `uint8_t` | Reserved for word alignment and future protocol revisions (must be `0x00`). |
+| **Sequence ID** | 8 Bytes | `uint64_t` | Client-generated correlation identifier for request/response multiplexing and out-of-order execution. |
+| **Header Length**| 4 Bytes | `uint32_t` | Length in bytes of optional metadata headers block (0 if none). |
+| **Payload Length**| 4 Bytes | `uint32_t` | Length in bytes of the payload body (up to 16 MiB). |
+
+##### Standard Opcodes
+
+| Opcode | Hex | Command Name | Description |
+| :--- | :--- | :--- | :--- |
+| 1 | `0x01` | `PING` | Connection health check and round-trip verification |
+| 2 | `0x02` | `SET` | Set key-value pair with optional TTL |
+| 3 | `0x03` | `GET` | Retrieve value by key |
+| 4 | `0x04` | `DEL` | Delete one or more keys |
+| 5 | `0x05` | `EXISTS` | Check key existence |
+| 6 | `0x06` | `EXPIRE` | Set key expiration time |
+| 7 | `0x07` | `TTL` | Retrieve remaining TTL |
+| 8 | `0x08` | `INCR` | Increment integer value |
+| 9 | `0x09` | `DECR` | Decrement integer value |
+| 10 | `0x0A` | `RATE_LIMIT` | Hybrid sliding window rate limit check |
+| 11 | `0x0B` | `QUOTA_INIT` | Initialize quota pool |
+| 12 | `0x0C` | `RESERVE` | Two-phase quota reservation |
+| 13 | `0x0D` | `COMMIT` | Commit reserved quota |
+| 14 | `0x0E` | `ROLLBACK` | Rollback reserved quota |
+| 15 | `0x0F` | `IDEM_EXEC` | Idempotent execution and single-flight coalescing |
+| 16 | `0x10` | `DBSIZE` | Total active database keys |
+
+---
+
+#### Why GKWP/2? (Design Rationale)
+
+1. **Elimination of Text/JSON Serialization Bottlenecks**:
+   - In GKWP/1, every request required decoding a JSON envelope (`id`, `op`, `body`), parsing strings, and serializing JSON responses.
+   - GKWP/2 utilizes fixed 24-byte binary framing: the server unpacks opcodes, status codes, and sequence IDs in $O(1)$ memory copies without dynamic memory allocations on the fast path.
+2. **True Request Multiplexing & Pipelining**:
+   - With an explicit 64-bit sequence/correlation ID in the header, clients can issue hundreds of concurrent requests over a single TCP socket without waiting for sequential responses.
+   - Responses can be returned in any order if executed asynchronously, eliminating Head-of-Line (HoL) blocking at the application level.
+3. **Bandwidth & CPU Cache Efficiency**:
+   - The 24-byte header is 64-bit aligned, fitting neatly inside a single CPU cache line (64 bytes).
+   - Packet framing overhead drops by over 60% compared to JSON/RESP text headers.
+4. **Extensibility & Streaming**:
+   - Dedicated `Flags` and `Header Length` fields allow transparent future upgrades such as end-to-end zstd compression, chunked streaming for large objects, and tracing metadata (OpenTelemetry trace IDs) without breaking wire compatibility.
+
+---
+
+#### Benchmark Comparison Across Protocols
+
+Benchmarks were conducted using a standardized multi-threaded benchmarking harness (`bench/all-protocols` branch) with 50 concurrent client connections issuing 50,000 requests per benchmark against GateKeeper running on an AMD Ryzen Linux environment (epoll non-blocking single-threaded core):
+
+| Protocol | Workload / Command | Throughput (QPS) | Latency P50 (ms) | Latency P99 (ms) | Throughput vs GKWP/1 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **GKWP/2** | `PING` | **25,125** | **1.83** | **3.89** | — |
+| **GKWP/2** | `RATE_LIMIT` | **25,577** | **1.79** | **3.82** | **+24.5%** |
+| **GKWP/2** | `SET` | **21,245** | **2.16** | **4.65** | **+27.3%** |
+| **GKWP/2** | `GET` | **23,197** | **1.99** | **4.28** | **+43.2%** |
+| GKWP/1 [DEPRECATED] | `RATE_LIMIT` | 20,547 | 2.24 | 4.91 | Baseline |
+| GKWP/1 [DEPRECATED] | `SET` | 16,695 | 2.82 | 6.12 | Baseline |
+| GKWP/1 [DEPRECATED] | `GET` | 16,197 | 2.89 | 6.25 | Baseline |
+| Redis RESP2 | `RATE_LIMIT` | 15,315 | 3.05 | 6.74 | -25.5% |
+| Redis RESP2 | `SET` | 12,351 | 3.84 | 8.21 | -26.0% |
+| Redis RESP2 | `GET` | 14,547 | 3.25 | 7.12 | -10.2% |
+| Redis RESP3 | `RATE_LIMIT` | 14,961 | 3.12 | 6.89 | -27.2% |
+| Redis RESP3 | `SET` | 11,588 | 4.10 | 8.78 | -30.6% |
+| Redis RESP3 | `GET` | 13,867 | 3.41 | 7.45 | -14.4% |
+
+> [!NOTE]
+> All protocol implementations and benchmark datasets are archived and reproducible on branch `bench/all-protocols`.
+
+---
+
+#### GKWP/1 Specification [DEPRECATED]
+
+> [!WARNING]
+> **GKWP/1 is deprecated** starting in GateKeeper v2.0. New client SDKs and services should exclusively use **GKWP/2** or the **HTTP/1.1 REST API**. GKWP/1 documentation is preserved below for reference and legacy integration.
 
 The GateKeeper Wire Protocol (version 1) is a lightweight, bidirectional, length-prefixed TCP protocol designed to minimize parsing overhead while retaining structured JSON payloads for application data.
 
-#### Frame Layout
+##### Frame Layout
 
-Every transmission across a GKWP connection consists of a 4-byte header followed by the frame payload:
+Every transmission across a GKWP/1 connection consists of a 4-byte header followed by the frame payload:
 
 ```
 +-----------------------------+------------------------------------+
@@ -72,7 +191,7 @@ Every transmission across a GKWP connection consists of a 4-byte header followed
 - **Length Field**: A 32-bit unsigned integer in network byte order (big-endian). It specifies the exact byte length of the trailing payload. The maximum allowed frame length is 16 MiB (16,777,216 bytes).
 - **Payload**: A valid UTF-8 JSON object representing either a request or a response.
 
-#### Request Frame Format
+##### Request Frame Format
 
 ```json
 {
@@ -91,7 +210,7 @@ Every transmission across a GKWP connection consists of a 4-byte header followed
 - `op` (string, required): Command opcode (case-insensitive in dispatching, canonicalized to uppercase).
 - `body` (object, optional): Command arguments formatted as structured JSON fields.
 
-#### Response Frame Format
+##### Response Frame Format
 
 Success Response:
 ```json
@@ -444,7 +563,7 @@ Các đặc điểm kiến trúc cốt lõi:
 - **Event Loop đơn luồng non-blocking dựa trên epoll**: Sử dụng cơ chế epoll multiplexing của Linux trên một luồng duy nhất để xử lý I/O bất đồng bộ. Toàn bộ dữ liệu lưu trữ trên RAM được cập nhật tuần tự, loại bỏ hoàn toàn hiện tượng tranh chấp khóa (mutex lock contention) và chi phí chuyển đổi ngữ cảnh (context switching) trên luồng thực thi dữ liệu.
 - **Không phụ thuộc thư viện ngoài (Zero External Dependencies)**: Được phát triển hoàn toàn bằng C++20 chuẩn mực, tích hợp sẵn bộ phân tích cú pháp JSON dạng luồng (`protocol::JsonReader`) và bảng băm nội bộ.
 - **Hỗ trợ đồng thời hai giao thức**: Lắng nghe song song trên hai cổng mạng độc lập:
-  1. Giao thức nhị phân GKWP/1 trên cổng 63779.
+  1. Giao thức nhị phân GKWP/2 trên cổng 63779.
   2. Giao thức RESTful HTTP/1.1 trên cổng 8080.
 - **Mô hình hết hạn kết hợp (Hybrid Expiration)**: Kết hợp giữa dọn dẹp thụ động (lazy eviction khi có truy cập) và quét ngẫu nhiên chủ động (active eviction định kỳ qua timer tích hợp trong Event Loop).
 - **Thuật toán Sliding Window Counter - Hybrid**: Triệt tiêu hiện tượng dồn tải tại ranh giới cửa sổ (Boundary Burst) với độ phức tạp bộ nhớ $O(1)$ và CPU $O(1)$.
@@ -453,11 +572,129 @@ Các đặc điểm kiến trúc cốt lõi:
 
 ---
 
-### 2. Đặc Tả Giao Thức GKWP/1
+### 2. Đặc Tả Giao Thức GKWP/2 & GKWP/1
+
+GateKeeper hỗ trợ hai thế hệ giao thức nhị phân gốc qua cổng TCP:
+- **GKWP/2 (Chuẩn Hiện Tại)**: Giao thức nhị phân hiệu năng cao, căn chỉnh bộ nhớ 24-byte header cố định, tối ưu hóa zero-copy, ghép kênh (multiplexing) bất đồng bộ và giảm thiểu tối đa độ trễ.
+- **GKWP/1 [DEPRECATED / KHÔNG KHUYẾN NGHỊ]**: Giao thức tiền thân sử dụng 4-byte tiền tố độ dài kết hợp nội dung JSON UTF-8.
+
+---
+
+#### Đặc Tả GKWP/2 (Chuẩn Mặc Định Hiện Tại)
+
+GKWP/2 được thiết kế lại hoàn toàn nhằm loại bỏ chi phí phân tích chuỗi JSON, cấp phát bộ nhớ động không cần thiết, đồng thời cung cấp khả năng ghép kênh và mở rộng trong tương lai.
+
+##### Cấu Trúc Gói Tin Nhị Phân
+
+Mọi gói tin truyền qua kết nối GKWP/2 đều bắt đầu bằng phần header cố định 24 byte theo chuẩn mạng (big-endian), nối tiếp bởi khối header mở rộng (tùy chọn) và thân dữ liệu (payload):
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Magic (0x474B)        |    Version    |    MsgType    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     Flags     |     Opcode    |     Status    |    Reserved   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                 Sequence / Correlation ID                     |
+|                            (64-bit)                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Header Length                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Payload Length                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Header Block (Tùy chọn)                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Payload Body (N Bytes)...                 |
++---------------------------------------------------------------+
+```
+
+##### Định Nghĩa Các Trường
+
+| Trường | Kích thước | Kiểu dữ liệu | Mô tả |
+| :--- | :--- | :--- | :--- |
+| **Magic** | 2 Bytes | `uint16_t` | Số nhận diện cố định `0x474B` (chuỗi ASCII `"GK"`). Giúp kiểm tra tính toàn vẹn gói tin ngay lập tức. |
+| **Version** | 1 Byte | `uint8_t` | Phiên bản giao thức (`0x02` đối với GKWP/2). |
+| **MsgType** | 1 Byte | `uint8_t` | Phân loại thông điệp: `0x01` (Request), `0x02` (Response), `0x03` (Heartbeat/Notification). |
+| **Flags** | 1 Byte | `uint8_t` | Cờ nhị phân: Bit 0 = Nén dữ liệu, Bit 1 = Streaming Chunk, Bit 2 = Kết thúc luồng (End of Stream). |
+| **Opcode** | 1 Byte | `uint8_t` | Mã lệnh thao tác (ví dụ: `0x01` PING, `0x02` SET, `0x03` GET, `0x0A` RATE_LIMIT). |
+| **Status** | 1 Byte | `uint8_t` | Trạng thái phản hồi: `0x00` (OK), `0x01` (Error), `0x02` (Not Found), `0x03` (Rate Limited). |
+| **Reserved** | 1 Byte | `uint8_t` | Dành riêng cho căn lề bộ nhớ và tương thích tương lai (luôn là `0x00`). |
+| **Sequence ID** | 8 Bytes | `uint64_t` | Định danh yêu cầu 64-bit do client tạo để ghép kênh (multiplexing) và xử lý bất đồng bộ. |
+| **Header Length**| 4 Bytes | `uint32_t` | Độ dài tính bằng byte của khối header bổ sung (bằng 0 nếu không có). |
+| **Payload Length**| 4 Bytes | `uint32_t` | Độ dài tính bằng byte của thân dữ liệu (tối đa 16 MiB). |
+
+##### Danh Mục Opcode Chuẩn
+
+| Opcode | Hex | Tên Lệnh | Mô tả |
+| :--- | :--- | :--- | :--- |
+| 1 | `0x01` | `PING` | Kiểm tra kết nối liveness và đo thời gian phản hồi |
+| 2 | `0x02` | `SET` | Lưu trữ cặp key-value kèm TTL tùy chọn |
+| 3 | `0x03` | `GET` | Truy xuất giá trị theo key |
+| 4 | `0x04` | `DEL` | Xóa một hoặc nhiều key |
+| 5 | `0x05` | `EXISTS` | Kiểm tra sự tồn tại của key |
+| 6 | `0x06` | `EXPIRE` | Thiết lập thời gian sống (TTL) cho key |
+| 7 | `0x07` | `TTL` | Lấy thời gian sống còn lại của key |
+| 8 | `0x08` | `INCR` | Tăng giá trị nguyên của key thêm 1 |
+| 9 | `0x09` | `DECR` | Giảm giá trị nguyên của key đi 1 |
+| 10 | `0x0A` | `RATE_LIMIT` | Kiểm tra giới hạn tốc độ theo thuật toán Sliding Window Hybrid |
+| 11 | `0x0B` | `QUOTA_INIT` | Khởi tạo nhóm hạn ngạch tài nguyên |
+| 12 | `0x0C` | `RESERVE` | Giữ trước hạn ngạch (pha 1) |
+| 13 | `0x0D` | `COMMIT` | Xác nhận lượng hạn ngạch thực tế tiêu thụ (pha 2) |
+| 14 | `0x0E` | `ROLLBACK` | Hủy bỏ giữ chỗ và hoàn trả 100% hạn ngạch |
+| 15 | `0x0F` | `IDEM_EXEC` | Thực thi đảm bảo idempotency và gom request trùng lặp |
+| 16 | `0x10` | `DBSIZE` | Lấy tổng số lượng key đang có trong cơ sở dữ liệu |
+
+---
+
+#### Tại Sao Lựa Chọn GKWP/2? (Lý Do Lựa Chọn)
+
+1. **Triệt tiêu nghẽn cổ chai phân tích chuỗi / JSON**:
+   - Ở GKWP/1, mỗi thao tác đều đòi hỏi parse JSON (`id`, `op`, `body`), cấp phát chuỗi và tuần tự hóa JSON cho phản hồi.
+   - GKWP/2 sử dụng cấu trúc nhị phân 24 byte cố định: server trích xuất opcode, status code và sequence ID trong thời gian $O(1)$ mà không cần cấp phát bộ nhớ động trên luồng xử lý chính.
+2. **Hỗ trợ Ghép Kênh (Multiplexing) & Pipelining Thực Thụ**:
+   - Trường Correlation/Sequence ID 64-bit cho phép một kết nối TCP duy nhất gửi hàng trăm request đồng thời mà không phải chờ đợi phản hồi tuần tự theo thứ tự đến (loại bỏ Head-of-Line blocking ở tầng ứng dụng).
+3. **Tối ưu hóa Băng Thông và Bộ Nhớ Cache CPU**:
+   - Header 24-byte được căn chỉnh chuẩn 64-bit, nằm trọn vẹn trong một đường cache CPU (64 bytes).
+   - Dung lượng header giảm hơn 60% so với định dạng văn bản JSON hay Redis RESP.
+4. **Khả năng mở rộng trong tương lai**:
+   - Các trường `Flags` và `Header Length` cho phép tích hợp nén luồng zstd, phân mảnh dữ liệu (chunking) cho payload lớn, và gắn kèm metadata truy vết phân tán (OpenTelemetry Trace Context) mà không phá vỡ tính tương thích ngược.
+
+---
+
+#### Bảng So Sánh Hiệu Năng (Benchmark Matrix)
+
+Thử nghiệm được thực hiện trên môi trường chuẩn hóa (`bench/all-protocols`) với 50 kết nối đồng thời và 50.000 requests mỗi kịch bản kiểm thử trên máy chủ Linux epoll đơn luồng:
+
+| Giao thức | Kịch bản kiểm thử | Thông lượng (QPS) | Độ trễ P50 (ms) | Độ trễ P99 (ms) | Tăng trưởng vs GKWP/1 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **GKWP/2** | `PING` | **25,125** | **1.83** | **3.89** | — |
+| **GKWP/2** | `RATE_LIMIT` | **25,577** | **1.79** | **3.82** | **+24.5%** |
+| **GKWP/2** | `SET` | **21,245** | **2.16** | **4.65** | **+27.3%** |
+| **GKWP/2** | `GET` | **23,197** | **1.99** | **4.28** | **+43.2%** |
+| GKWP/1 [DEPRECATED] | `RATE_LIMIT` | 20,547 | 2.24 | 4.91 | Gốc (Baseline) |
+| GKWP/1 [DEPRECATED] | `SET` | 16,695 | 2.82 | 6.12 | Gốc (Baseline) |
+| GKWP/1 [DEPRECATED] | `GET` | 16,197 | 2.89 | 6.25 | Gốc (Baseline) |
+| Redis RESP2 | `RATE_LIMIT` | 15,315 | 3.05 | 6.74 | -25.5% |
+| Redis RESP2 | `SET` | 12,351 | 3.84 | 8.21 | -26.0% |
+| Redis RESP2 | `GET` | 14,547 | 3.25 | 7.12 | -10.2% |
+| Redis RESP3 | `RATE_LIMIT` | 14,961 | 3.12 | 6.89 | -27.2% |
+| Redis RESP3 | `SET` | 11,588 | 4.10 | 8.78 | -30.6% |
+| Redis RESP3 | `GET` | 13,867 | 3.41 | 7.45 | -14.4% |
+
+> [!NOTE]
+> Toàn bộ mã nguồn triển khai các giao thức và dữ liệu benchmark được lưu trữ đầy đủ tại nhánh `bench/all-protocols`.
+
+---
+
+#### Đặc Tả GKWP/1 [DEPRECATED / KHÔNG KHUYẾN NGHỊ]
+
+> [!WARNING]
+> **GKWP/1 đã bị đánh dấu deprecated** từ phiên bản GateKeeper v2.0. Các hệ thống và client mới được khuyến nghị sử dụng **GKWP/2** hoặc **REST API HTTP/1.1**. Nội dung dưới đây được lưu giữ nhằm phục vụ việc tích hợp với các hệ thống cũ.
 
 Giao thức GateKeeper Wire Protocol (phiên bản 1) hoạt động trên nền TCP, sử dụng phần đầu cố định 4 byte để xác định độ dài gói tin, phía sau là nội dung JSON định dạng UTF-8.
 
-#### Cấu Trúc Gói Tin
+##### Cấu Trúc Gói Tin
 
 ```
 +-----------------------------+------------------------------------+
@@ -467,6 +704,48 @@ Giao thức GateKeeper Wire Protocol (phiên bản 1) hoạt động trên nền
 
 - **Trường Length**: Số nguyên không dấu 32-bit (Big-Endian) xác định chính xác số byte payload tiếp theo (tối đa 16 MiB).
 - **Trường Payload**: Đối tượng JSON định dạng UTF-8 chứa nội dung request hoặc response.
+
+##### Định Dạng Gói Tin Yêu Cầu (Request)
+
+```json
+{
+  "id": "req-1001",
+  "op": "GK.RATE_LIMIT",
+  "body": {
+    "key": "ratelimit:tenant_a:user_12",
+    "limit": 100,
+    "window_ms": 60000,
+    "cost": 1
+  }
+}
+```
+
+##### Định Dạng Gói Tin Phản Hồi (Response)
+
+Thành công:
+```json
+{
+  "id": "req-1001",
+  "ok": true,
+  "result": {
+    "allowed": true,
+    "remaining": 99,
+    "retry_after_ms": 0
+  }
+}
+```
+
+Thất bại:
+```json
+{
+  "id": "req-1001",
+  "ok": false,
+  "error": {
+    "code": "INVALID_ARGUMENTS",
+    "message": "limit must be greater than zero"
+  }
+}
+```
 
 ---
 
