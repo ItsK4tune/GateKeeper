@@ -61,6 +61,12 @@ std::string Registry::BuildHelpOutput() const
             {"GK.QUOTA_INIT", "GK.QUOTA_INIT key amount"},
             {"GK.QUOTA_GET", "GK.QUOTA_GET key"}
         }},
+        {"Idempotency & Single-Flight", {
+            {"GK.IDEM_BEGIN", "GK.IDEM_BEGIN key request_hash [ttl_ms] [owner_token]"},
+            {"GK.IDEM_COMPLETE", "GK.IDEM_COMPLETE key owner_token response_code [response_body]"},
+            {"GK.IDEM_FAIL", "GK.IDEM_FAIL key owner_token [error_message]"},
+            {"GK.IDEM_GET", "GK.IDEM_GET key"}
+        }},
         {"Key Management", {
             {"DEL", "DEL key [key ...]"},
             {"EXISTS", "EXISTS key [key ...]"},
@@ -231,6 +237,36 @@ Registry::Registry(RequestExecutor execute_remote)
         if (args.size() != 1 || args[0].empty())
             return Result{"INVALID_ARGUMENTS: GK.QUOTA_GET key", false, 1};
         return FormatResponse(execute_remote("GK.QUOTA_GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
+    });
+    Register("GK.IDEM_BEGIN", "GK.IDEM_BEGIN key request_hash [ttl_ms] [owner_token]", [execute_remote](const Arguments& args) {
+        if (args.size() < 2 || args[0].empty() || args[1].empty())
+            return Result{"INVALID_ARGUMENTS: GK.IDEM_BEGIN key request_hash [ttl_ms] [owner_token]", false, 1};
+        std::string body = "{\"key\":" + protocol::QuoteJson(args[0]) + ",\"request_hash\":" + protocol::QuoteJson(args[1]);
+        if (args.size() >= 3 && !args[2].empty()) body += ",\"ttl_ms\":" + args[2];
+        if (args.size() >= 4 && !args[3].empty()) body += ",\"owner_token\":" + protocol::QuoteJson(args[3]);
+        body += "}";
+        return FormatResponse(execute_remote("GK.IDEM_BEGIN", body));
+    });
+    Register("GK.IDEM_COMPLETE", "GK.IDEM_COMPLETE key owner_token response_code [response_body]", [execute_remote](const Arguments& args) {
+        if (args.size() < 3 || args[0].empty() || args[1].empty() || args[2].empty())
+            return Result{"INVALID_ARGUMENTS: GK.IDEM_COMPLETE key owner_token response_code [response_body]", false, 1};
+        std::string body = "{\"key\":" + protocol::QuoteJson(args[0]) + ",\"owner_token\":" + protocol::QuoteJson(args[1]) + ",\"response_code\":" + args[2];
+        if (args.size() >= 4) body += ",\"response_body\":" + protocol::QuoteJson(args[3]);
+        body += "}";
+        return FormatResponse(execute_remote("GK.IDEM_COMPLETE", body));
+    });
+    Register("GK.IDEM_FAIL", "GK.IDEM_FAIL key owner_token [error_message]", [execute_remote](const Arguments& args) {
+        if (args.size() < 2 || args[0].empty() || args[1].empty())
+            return Result{"INVALID_ARGUMENTS: GK.IDEM_FAIL key owner_token [error_message]", false, 1};
+        std::string body = "{\"key\":" + protocol::QuoteJson(args[0]) + ",\"owner_token\":" + protocol::QuoteJson(args[1]);
+        if (args.size() >= 3) body += ",\"error_message\":" + protocol::QuoteJson(args[2]);
+        body += "}";
+        return FormatResponse(execute_remote("GK.IDEM_FAIL", body));
+    });
+    Register("GK.IDEM_GET", "GK.IDEM_GET key", [execute_remote](const Arguments& args) {
+        if (args.size() != 1 || args[0].empty())
+            return Result{"INVALID_ARGUMENTS: GK.IDEM_GET key", false, 1};
+        return FormatResponse(execute_remote("GK.IDEM_GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
     });
     Register("DEL", "DEL key [key ...]", [execute_remote](const Arguments& args) {
         if (args.empty()) return Result{"INVALID_ARGUMENTS: DEL key [key ...]", false, 1};

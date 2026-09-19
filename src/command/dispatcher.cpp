@@ -1,4 +1,5 @@
-﻿#include "gatekeeper/command/dispatcher.h"
+#include "gatekeeper/domain/idempotency/idempotency_ops.h"
+#include "gatekeeper/command/dispatcher.h"
 #include "gatekeeper/domain/ratelimit/counter_ops.h"
 #include "gatekeeper/domain/kv/key_ops.h"
 #include "gatekeeper/command/name.h"
@@ -33,6 +34,7 @@ Dispatcher::Dispatcher(std::unique_ptr<storage::Store> store)
     RegisterTtlOps(*this, *store_);
     RegisterCounterOps(*this, *store_);
     RegisterReservationOps(*this, *store_);
+    RegisterIdempotencyOps(*this, *store_);
 }
 
 Dispatcher::~Dispatcher() = default;

@@ -48,6 +48,7 @@ gatekeeper_library(gk_domain
     src/domain/kv/ttl_ops.cpp
     src/domain/ratelimit/counter_ops.cpp
     src/domain/quota/reservation_ops.cpp
+    src/domain/idempotency/idempotency_ops.cpp
 )
 target_link_libraries(gk_domain PUBLIC gk_protocol gk_command_names gk_storage)
 
@@ -118,6 +119,10 @@ if(BUILD_TESTING)
     add_executable(idempotency_state_tests tests/domain/idempotency/idempotency_state_test.cpp)
     target_link_libraries(idempotency_state_tests PRIVATE gk_storage)
     add_test(NAME idempotency_state_tests COMMAND idempotency_state_tests)
+
+    add_executable(idempotency_commands_tests tests/domain/idempotency/idempotency_commands_test.cpp)
+    target_link_libraries(idempotency_commands_tests PRIVATE gk_commands)
+    add_test(NAME idempotency_commands_tests COMMAND idempotency_commands_tests)
 
     add_executable(concurrent_clients_tests tests/net/concurrent_clients_test.cpp)
     target_link_libraries(concurrent_clients_tests PRIVATE gk_net gk_storage)
