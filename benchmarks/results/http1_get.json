@@ -1,0 +1,21 @@
+{
+  "protocol": "HTTP/1.1",
+  "operation": "get",
+  "target": "127.0.0.1:8080",
+  "concurrency": 50,
+  "duration_sec": 1.020869957,
+  "total_requests": 20000,
+  "successful": 20000,
+  "failed": 0,
+  "qps": 19591.13387837703,
+  "latencies_ms": {
+    "min": 0.066,
+    "avg": 2.454,
+    "p50": 2.302,
+    "p90": 4,
+    "p95": 4.898,
+    "p99": 7.058,
+    "p999": 16.12,
+    "max": 33.877
+  }
+}
