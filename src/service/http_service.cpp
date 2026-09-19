@@ -7,9 +7,69 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace gatekeeper::service
 {
+
+namespace
+{
+
+std::string UrlDecode(std::string_view in)
+{
+    std::string out;
+    out.reserve(in.size());
+    for (std::size_t i = 0; i < in.size(); ++i)
+    {
+        if (in[i] == '%' && i + 2 < in.size())
+        {
+            auto hex_val = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int h1 = hex_val(in[i + 1]);
+            int h2 = hex_val(in[i + 2]);
+            if (h1 != -1 && h2 != -1)
+            {
+                out += static_cast<char>((h1 << 4) | h2);
+                i += 2;
+                continue;
+            }
+        }
+        else if (in[i] == '+')
+        {
+            out += ' ';
+            continue;
+        }
+        out += in[i];
+    }
+    return out;
+}
+
+std::string ExtractKeyFromQuery(std::string_view query)
+{
+    constexpr std::string_view prefix = "key=";
+    auto pos = query.find(prefix);
+    while (pos != std::string_view::npos)
+    {
+        if (pos == 0 || query[pos - 1] == '&')
+        {
+            auto val_start = pos + prefix.size();
+            auto val_end = query.find('&', val_start);
+            if (val_end == std::string_view::npos)
+            {
+                return UrlDecode(query.substr(val_start));
+            }
+            return UrlDecode(query.substr(val_start, val_end - val_start));
+        }
+        pos = query.find(prefix, pos + 1);
+    }
+    return {};
+}
+
+}
 
 HttpService::HttpService(
     storage::Store& store,
@@ -61,10 +121,44 @@ net::HttpResponse HttpService::Handle(const net::HttpRequest& req)
     {
         return HandleIdempotencyFail(req);
     }
+    if (req.method == "POST" && req.path == "/v1/kv/set")
+    {
+        return HandleKvSet(req);
+    }
+    if (req.method == "GET" && req.path == "/v1/kv/get")
+    {
+        return HandleKvGet(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/kv/del")
+    {
+        return HandleKvDel(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/kv/exists")
+    {
+        return HandleKvExists(req);
+    }
+    if (req.method == "GET" && req.path == "/v1/kv/type")
+    {
+        return HandleKvType(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/kv/expire")
+    {
+        return HandleKvExpire(req);
+    }
+    if (req.method == "GET" && req.path == "/v1/kv/ttl")
+    {
+        return HandleKvTtl(req);
+    }
 
     if (req.path == "/healthz" || req.path == "/v1/rate-limit/check" ||
         req.path == "/v1/quota/reserve" || req.path == "/v1/quota/commit" ||
-        req.path == "/v1/quota/rollback" || req.path == "/v1/quota/init" || req.path == "/v1/idempotency/begin" || req.path == "/v1/idempotency/complete" || req.path == "/v1/idempotency/fail")
+        req.path == "/v1/quota/rollback" || req.path == "/v1/quota/init" ||
+        req.path == "/v1/idempotency/begin" || req.path == "/v1/idempotency/complete" ||
+        req.path == "/v1/idempotency/fail" ||
+        req.path == "/v1/kv/set" || req.path == "/v1/kv/get" ||
+        req.path == "/v1/kv/del" || req.path == "/v1/kv/exists" ||
+        req.path == "/v1/kv/type" || req.path == "/v1/kv/expire" ||
+        req.path == "/v1/kv/ttl")
     {
         net::HttpResponse res;
         res.status_code = 405;
@@ -270,15 +364,27 @@ net::HttpResponse HttpService::HandleQuotaReserve(const net::HttpRequest& req)
         return BadRequest(std::string("invalid JSON: ") + ex.what());
     }
 
-    if (key.empty() || !has_amount || amount == 0 || !has_ttl || ttl_ms == 0)
+    if (key.empty())
     {
-        return BadRequest("key, amount (>0) and ttl_ms (>0) are required");
+        return BadRequest("key is required");
+    }
+    if (!has_amount || amount == 0)
+    {
+        return BadRequest("amount is required and must be greater than 0");
+    }
+    if (!has_ttl || ttl_ms == 0)
+    {
+        return BadRequest("ttl_ms is required and must be greater than 0");
     }
 
     const auto res = store_.ReserveQuota(key, amount, ttl_ms);
     if (!res.ok)
     {
-        return BadRequest(res.error_message);
+        net::HttpResponse resp;
+        resp.status_code = 400;
+        resp.status_text = "Bad Request";
+        resp.body = "{\"error\":\"" + res.error_code + "\",\"message\":\"" + res.error_message + "\"}";
+        return resp;
     }
 
     net::HttpResponse resp;
@@ -293,15 +399,15 @@ net::HttpResponse HttpService::HandleQuotaReserve(const net::HttpRequest& req)
         }
         resp.status_code = 200;
         resp.status_text = "OK";
-        resp.body = "{\"reserved\":true,\"reservation_id\":\"" + res.reservation_id +
-                    "\",\"remaining\":" + std::to_string(res.remaining) + "}";
+        resp.body = "{\"reserved\":true,\"remaining\":" + std::to_string(res.remaining) +
+                    ",\"reservation_id\":\"" + res.reservation_id + "\"}";
     }
     else
     {
         resp.status_code = 429;
         resp.status_text = "Too Many Requests";
-        resp.body = "{\"reserved\":false,\"reservation_id\":\"\",\"remaining\":" +
-                    std::to_string(res.remaining) + "}";
+        resp.body = "{\"reserved\":false,\"remaining\":" + std::to_string(res.remaining) +
+                    ",\"reservation_id\":\"\"}";
     }
     return resp;
 }
@@ -314,8 +420,9 @@ net::HttpResponse HttpService::HandleQuotaCommit(const net::HttpRequest& req)
     }
 
     std::string key;
-    std::string reservation_id;
+    std::string res_id;
     std::uint64_t actual_amount = 0;
+    bool has_actual = false;
 
     try
     {
@@ -331,11 +438,12 @@ net::HttpResponse HttpService::HandleQuotaCommit(const net::HttpRequest& req)
             }
             else if (field == "reservation_id")
             {
-                reservation_id = reader.String();
+                res_id = reader.String();
             }
             else if (field == "actual_amount")
             {
                 actual_amount = reader.UnsignedNumber();
+                has_actual = true;
             }
             else
             {
@@ -355,33 +463,27 @@ net::HttpResponse HttpService::HandleQuotaCommit(const net::HttpRequest& req)
         return BadRequest(std::string("invalid JSON: ") + ex.what());
     }
 
-    if (key.empty() || reservation_id.empty())
+    if (key.empty() || res_id.empty() || !has_actual)
     {
-        return BadRequest("key and reservation_id are required");
+        return BadRequest("key, reservation_id, and actual_amount are required");
     }
 
-    const auto res = store_.CommitQuota(key, reservation_id, actual_amount);
+    const auto res = store_.CommitQuota(key, res_id, actual_amount);
     if (!res.ok)
     {
-        return BadRequest(res.error_message);
+        net::HttpResponse resp;
+        resp.status_code = 400;
+        resp.status_text = "Bad Request";
+        resp.body = "{\"error\":\"" + res.error_code + "\",\"message\":\"" + res.error_message + "\"}";
+        return resp;
     }
 
     net::HttpResponse resp;
-    if (res.committed)
-    {
-        resp.status_code = 200;
-        resp.status_text = "OK";
-        resp.body = "{\"committed\":true,\"actual_amount\":" + std::to_string(res.actual_amount) +
-                    ",\"refunded\":" + std::to_string(res.refunded) +
-                    ",\"remaining\":" + std::to_string(res.remaining) + "}";
-    }
-    else
-    {
-        resp.status_code = 404;
-        resp.status_text = "Not Found";
-        resp.body = "{\"committed\":false,\"error\":\"" + res.error_code +
-                    "\",\"message\":\"" + res.error_message + "\"}";
-    }
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"committed\":true,\"actual_amount\":" + std::to_string(res.actual_amount) +
+                ",\"refunded\":" + std::to_string(res.refunded) +
+                ",\"remaining\":" + std::to_string(res.remaining) + "}";
     return resp;
 }
 
@@ -393,7 +495,7 @@ net::HttpResponse HttpService::HandleQuotaRollback(const net::HttpRequest& req)
     }
 
     std::string key;
-    std::string reservation_id;
+    std::string res_id;
 
     try
     {
@@ -409,7 +511,7 @@ net::HttpResponse HttpService::HandleQuotaRollback(const net::HttpRequest& req)
             }
             else if (field == "reservation_id")
             {
-                reservation_id = reader.String();
+                res_id = reader.String();
             }
             else
             {
@@ -429,32 +531,26 @@ net::HttpResponse HttpService::HandleQuotaRollback(const net::HttpRequest& req)
         return BadRequest(std::string("invalid JSON: ") + ex.what());
     }
 
-    if (key.empty() || reservation_id.empty())
+    if (key.empty() || res_id.empty())
     {
         return BadRequest("key and reservation_id are required");
     }
 
-    const auto res = store_.RollbackQuota(key, reservation_id);
+    const auto res = store_.RollbackQuota(key, res_id);
     if (!res.ok)
     {
-        return BadRequest(res.error_message);
+        net::HttpResponse resp;
+        resp.status_code = 400;
+        resp.status_text = "Bad Request";
+        resp.body = "{\"error\":\"" + res.error_code + "\",\"message\":\"" + res.error_message + "\"}";
+        return resp;
     }
 
     net::HttpResponse resp;
-    if (res.rolled_back)
-    {
-        resp.status_code = 200;
-        resp.status_text = "OK";
-        resp.body = "{\"rolled_back\":true,\"refunded\":" + std::to_string(res.refunded) +
-                    ",\"remaining\":" + std::to_string(res.remaining) + "}";
-    }
-    else
-    {
-        resp.status_code = 404;
-        resp.status_text = "Not Found";
-        resp.body = "{\"rolled_back\":false,\"error\":\"" + res.error_code +
-                    "\",\"message\":\"" + res.error_message + "\"}";
-    }
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"rolled_back\":true,\"refunded\":" + std::to_string(res.refunded) +
+                ",\"remaining\":" + std::to_string(res.remaining) + "}";
     return resp;
 }
 
@@ -518,7 +614,7 @@ net::HttpResponse HttpService::HandleQuotaInit(const net::HttpRequest& req)
         return BadRequest("key and quota are required");
     }
 
-    store_.Set(key, std::to_string(quota), storage::WriteCondition::Always, ttl_ms);
+    const bool set = store_.Set(key, std::to_string(quota), storage::WriteCondition::Always, ttl_ms);
     if (aof_writer_)
     {
         std::string aof_body = "{\"key\":" + protocol::QuoteJson(key) +
@@ -529,7 +625,7 @@ net::HttpResponse HttpService::HandleQuotaInit(const net::HttpRequest& req)
     net::HttpResponse resp;
     resp.status_code = 200;
     resp.status_text = "OK";
-    resp.body = "{\"ok\":true,\"quota\":" + std::to_string(quota) + "}";
+    resp.body = "{\"ok\":" + std::string(set ? "true" : "false") + ",\"quota\":" + std::to_string(quota) + "}";
     return resp;
 }
 
@@ -542,7 +638,7 @@ net::HttpResponse HttpService::HandleIdempotencyBegin(const net::HttpRequest& re
 
     std::string key;
     std::string request_hash;
-    std::uint64_t ttl_ms = 60000;
+    std::uint64_t ttl_ms = 0;
     std::string owner_token;
 
     try
@@ -837,6 +933,511 @@ net::HttpResponse HttpService::HandleIdempotencyFail(const net::HttpRequest& req
                                ",\"error_message\":" + protocol::QuoteJson(error_message) + "}";
         aof_writer_->Append("GK.IDEM_FAIL", aof_body);
     }
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleKvSet(const net::HttpRequest& req)
+{
+    if (req.body.empty())
+    {
+        return BadRequest("missing JSON body");
+    }
+
+    std::string key;
+    std::string value;
+    std::uint64_t ttl_ms = 0;
+    storage::WriteCondition condition = storage::WriteCondition::Always;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "key")
+            {
+                key = reader.String();
+            }
+            else if (field == "value")
+            {
+                value = reader.String();
+            }
+            else if (field == "ttl_ms")
+            {
+                ttl_ms = reader.UnsignedNumber();
+            }
+            else if (field == "ttl_seconds")
+            {
+                ttl_ms = reader.UnsignedNumber() * 1000;
+            }
+            else if (field == "condition")
+            {
+                auto cond_str = reader.String();
+                if (cond_str == "nx" || cond_str == "if_not_exists")
+                {
+                    condition = storage::WriteCondition::IfAbsent;
+                }
+                else if (cond_str == "xx" || cond_str == "if_exists")
+                {
+                    condition = storage::WriteCondition::IfPresent;
+                }
+                else if (cond_str == "always")
+                {
+                    condition = storage::WriteCondition::Always;
+                }
+                else
+                {
+                    throw std::invalid_argument("unsupported condition: " + cond_str);
+                }
+            }
+            else if (field == "if_not_exists")
+            {
+                if (reader.Boolean())
+                {
+                    condition = storage::WriteCondition::IfAbsent;
+                }
+            }
+            else if (field == "if_exists")
+            {
+                if (reader.Boolean())
+                {
+                    condition = storage::WriteCondition::IfPresent;
+                }
+            }
+            else
+            {
+                throw std::invalid_argument("unsupported field: " + field);
+            }
+
+            if (reader.Take('}'))
+            {
+                break;
+            }
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (key.empty())
+    {
+        return BadRequest("key is required and must not be empty");
+    }
+
+    const bool stored = store_.Set(key, value, condition, ttl_ms);
+
+    if (stored && aof_writer_)
+    {
+        std::string aof_body = "{\"key\":" + protocol::QuoteJson(key) +
+                               ",\"value\":" + protocol::QuoteJson(value);
+        if (ttl_ms > 0)
+        {
+            aof_body += ",\"ttl_ms\":" + std::to_string(ttl_ms);
+        }
+        if (condition == storage::WriteCondition::IfAbsent)
+        {
+            aof_body += ",\"if_not_exists\":true";
+        }
+        else if (condition == storage::WriteCondition::IfPresent)
+        {
+            aof_body += ",\"if_exists\":true";
+        }
+        aof_body += "}";
+        aof_writer_->Append("SET", aof_body);
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = std::string("{\"ok\":true,\"set\":") + (stored ? "true}" : "false}");
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleKvGet(const net::HttpRequest& req)
+{
+    std::string key = ExtractKeyFromQuery(req.query);
+
+    if (key.empty() && !req.body.empty())
+    {
+        try
+        {
+            protocol::JsonReader reader(req.body);
+            reader.Expect('{');
+            do
+            {
+                auto field = reader.String();
+                reader.Expect(':');
+                if (field == "key")
+                {
+                    key = reader.String();
+                }
+                else
+                {
+                    throw std::invalid_argument("unsupported field: " + field);
+                }
+                if (reader.Take('}'))
+                {
+                    break;
+                }
+                reader.Expect(',');
+            } while (true);
+            reader.End();
+        }
+        catch (const std::exception& ex)
+        {
+            return BadRequest(std::string("invalid JSON: ") + ex.what());
+        }
+    }
+
+    if (key.empty())
+    {
+        return BadRequest("key is required");
+    }
+
+    const auto val = store_.Get(key);
+    if (!val)
+    {
+        net::HttpResponse resp;
+        resp.status_code = 404;
+        resp.status_text = "Not Found";
+        resp.body = "{\"error\":\"KEY_NOT_FOUND\",\"message\":\"key does not exist\"}";
+        return resp;
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"key\":" + protocol::QuoteJson(key) + ",\"value\":" + protocol::QuoteJson(*val) + "}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleKvDel(const net::HttpRequest& req)
+{
+    std::vector<std::string> keys;
+
+    if (!req.body.empty())
+    {
+        try
+        {
+            protocol::JsonReader reader(req.body);
+            reader.Expect('{');
+            if (!reader.Take('}'))
+            {
+                do
+                {
+                    auto field = reader.String();
+                    reader.Expect(':');
+                    if (field == "key")
+                    {
+                        keys.push_back(reader.String());
+                    }
+                    else if (field == "keys")
+                    {
+                        auto arr = reader.StringArray();
+                        keys.insert(keys.end(), arr.begin(), arr.end());
+                    }
+                    else
+                    {
+                        throw std::invalid_argument("unsupported field: " + field);
+                    }
+                    if (reader.Take('}'))
+                    {
+                        break;
+                    }
+                    reader.Expect(',');
+                } while (true);
+            }
+            reader.End();
+        }
+        catch (const std::exception& ex)
+        {
+            return BadRequest(std::string("invalid JSON: ") + ex.what());
+        }
+    }
+    else
+    {
+        std::string key = ExtractKeyFromQuery(req.query);
+        if (!key.empty())
+        {
+            keys.push_back(std::move(key));
+        }
+    }
+
+    if (keys.empty())
+    {
+        return BadRequest("key or keys are required");
+    }
+
+    std::size_t deleted = 0;
+    for (const auto& k : keys)
+    {
+        if (store_.Del(k))
+        {
+            ++deleted;
+            if (aof_writer_)
+            {
+                aof_writer_->Append("DEL", "{\"key\":" + protocol::QuoteJson(k) + "}");
+            }
+        }
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"deleted\":" + std::to_string(deleted) + "}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleKvExists(const net::HttpRequest& req)
+{
+    std::vector<std::string> keys;
+
+    if (!req.body.empty())
+    {
+        try
+        {
+            protocol::JsonReader reader(req.body);
+            reader.Expect('{');
+            if (!reader.Take('}'))
+            {
+                do
+                {
+                    auto field = reader.String();
+                    reader.Expect(':');
+                    if (field == "key")
+                    {
+                        keys.push_back(reader.String());
+                    }
+                    else if (field == "keys")
+                    {
+                        auto arr = reader.StringArray();
+                        keys.insert(keys.end(), arr.begin(), arr.end());
+                    }
+                    else
+                    {
+                        throw std::invalid_argument("unsupported field: " + field);
+                    }
+                    if (reader.Take('}'))
+                    {
+                        break;
+                    }
+                    reader.Expect(',');
+                } while (true);
+            }
+            reader.End();
+        }
+        catch (const std::exception& ex)
+        {
+            return BadRequest(std::string("invalid JSON: ") + ex.what());
+        }
+    }
+    else
+    {
+        std::string key = ExtractKeyFromQuery(req.query);
+        if (!key.empty())
+        {
+            keys.push_back(std::move(key));
+        }
+    }
+
+    if (keys.empty())
+    {
+        return BadRequest("key or keys are required");
+    }
+
+    std::size_t count = 0;
+    for (const auto& k : keys)
+    {
+        if (store_.Exists(k))
+        {
+            ++count;
+        }
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"count\":" + std::to_string(count) + "}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleKvType(const net::HttpRequest& req)
+{
+    std::string key = ExtractKeyFromQuery(req.query);
+
+    if (key.empty() && !req.body.empty())
+    {
+        try
+        {
+            protocol::JsonReader reader(req.body);
+            reader.Expect('{');
+            do
+            {
+                auto field = reader.String();
+                reader.Expect(':');
+                if (field == "key")
+                {
+                    key = reader.String();
+                }
+                else
+                {
+                    throw std::invalid_argument("unsupported field: " + field);
+                }
+                if (reader.Take('}'))
+                {
+                    break;
+                }
+                reader.Expect(',');
+            } while (true);
+            reader.End();
+        }
+        catch (const std::exception& ex)
+        {
+            return BadRequest(std::string("invalid JSON: ") + ex.what());
+        }
+    }
+
+    if (key.empty())
+    {
+        return BadRequest("key is required");
+    }
+
+    const auto type = store_.Type(key);
+    std::string type_str = "none";
+    if (type == storage::DataType::String)
+    {
+        type_str = "string";
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"key\":" + protocol::QuoteJson(key) + ",\"type\":\"" + type_str + "\"}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleKvExpire(const net::HttpRequest& req)
+{
+    if (req.body.empty())
+    {
+        return BadRequest("missing JSON body");
+    }
+
+    std::string key;
+    std::uint64_t ttl_ms = 0;
+    bool has_ttl = false;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "key")
+            {
+                key = reader.String();
+            }
+            else if (field == "ttl_ms" || field == "milliseconds")
+            {
+                ttl_ms = reader.UnsignedNumber();
+                has_ttl = true;
+            }
+            else if (field == "ttl_seconds" || field == "seconds")
+            {
+                ttl_ms = reader.UnsignedNumber() * 1000;
+                has_ttl = true;
+            }
+            else
+            {
+                throw std::invalid_argument("unsupported field: " + field);
+            }
+
+            if (reader.Take('}'))
+            {
+                break;
+            }
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (key.empty() || !has_ttl)
+    {
+        return BadRequest("key and ttl are required");
+    }
+
+    const bool ok = store_.Expire(key, ttl_ms);
+    if (ok && aof_writer_)
+    {
+        aof_writer_->Append("PEXPIRE", "{\"key\":" + protocol::QuoteJson(key) + ",\"ttl_ms\":" + std::to_string(ttl_ms) + "}");
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = std::string("{\"ok\":") + (ok ? "true}" : "false}");
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleKvTtl(const net::HttpRequest& req)
+{
+    std::string key = ExtractKeyFromQuery(req.query);
+
+    if (key.empty() && !req.body.empty())
+    {
+        try
+        {
+            protocol::JsonReader reader(req.body);
+            reader.Expect('{');
+            do
+            {
+                auto field = reader.String();
+                reader.Expect(':');
+                if (field == "key")
+                {
+                    key = reader.String();
+                }
+                else
+                {
+                    throw std::invalid_argument("unsupported field: " + field);
+                }
+                if (reader.Take('}'))
+                {
+                    break;
+                }
+                reader.Expect(',');
+            } while (true);
+            reader.End();
+        }
+        catch (const std::exception& ex)
+        {
+            return BadRequest(std::string("invalid JSON: ") + ex.what());
+        }
+    }
+
+    if (key.empty())
+    {
+        return BadRequest("key is required");
+    }
+
+    const auto ttl_sec = store_.Ttl(key);
+    const auto ttl_ms = store_.Pttl(key);
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"key\":" + protocol::QuoteJson(key) + ",\"ttl_seconds\":" + std::to_string(ttl_sec) + ",\"ttl_ms\":" + std::to_string(ttl_ms) + "}";
     return resp;
 }
 

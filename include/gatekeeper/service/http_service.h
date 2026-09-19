@@ -39,6 +39,13 @@ private:
     net::HttpResponse HandleIdempotencyBegin(const net::HttpRequest& req);
     net::HttpResponse HandleIdempotencyComplete(const net::HttpRequest& req);
     net::HttpResponse HandleIdempotencyFail(const net::HttpRequest& req);
+    net::HttpResponse HandleKvSet(const net::HttpRequest& req);
+    net::HttpResponse HandleKvGet(const net::HttpRequest& req);
+    net::HttpResponse HandleKvDel(const net::HttpRequest& req);
+    net::HttpResponse HandleKvExists(const net::HttpRequest& req);
+    net::HttpResponse HandleKvType(const net::HttpRequest& req);
+    net::HttpResponse HandleKvExpire(const net::HttpRequest& req);
+    net::HttpResponse HandleKvTtl(const net::HttpRequest& req);
 
     static net::HttpResponse BadRequest(const std::string& message);
 };

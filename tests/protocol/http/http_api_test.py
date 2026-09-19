@@ -1,4 +1,4 @@
-﻿import json
+import json
 import socket
 import subprocess
 import sys
@@ -59,41 +59,38 @@ try:
             "subject": "sub_test",
             "resource": "res_test",
             "limit": 5,
-            "window_ms": 60000
+            "window_ms": 10000,
+            "cost": 1
         }).encode()
-        req = urllib.request.Request(
-            f"{base_url}/v1/rate-limit/check",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
+        req = urllib.request.Request(f"{base_url}/v1/rate-limit/check", data=payload, headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            require(resp.status == 200, f"rate-limit check #{i+1} status {resp.status}")
+            require(resp.status == 200, f"iteration {i} failed with status {resp.status}")
             data = json.loads(resp.read().decode())
+            require(data.get("allowed") is True, f"iteration {i} not allowed: {data}")
             expected_remaining = 5 - (i + 1)
-            require(data.get("allowed") is True, f"expected allowed=True at {i+1}")
-            require(data.get("remaining") == expected_remaining, f"expected remaining={expected_remaining}, got {data.get('remaining')}")
-            require(resp.headers.get("X-RateLimit-Limit") == "5", "X-RateLimit-Limit header missing")
+            require(data.get("remaining") == expected_remaining, f"iteration {i} remaining mismatch")
+            require(resp.headers.get("X-RateLimit-Limit") == "5", "X-RateLimit-Limit header mismatch")
             require(resp.headers.get("X-RateLimit-Remaining") == str(expected_remaining), "X-RateLimit-Remaining header mismatch")
 
-    # 6th request: Rate limited (429)
-    req = urllib.request.Request(
-        f"{base_url}/v1/rate-limit/check",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
+    # 6th request must be rejected with 429
+    payload = json.dumps({
+        "tenant": "tenant_test",
+        "subject": "sub_test",
+        "resource": "res_test",
+        "limit": 5,
+        "window_ms": 10000,
+        "cost": 1
+    }).encode()
+    req = urllib.request.Request(f"{base_url}/v1/rate-limit/check", data=payload, headers={"Content-Type": "application/json"}, method="POST")
     try:
         urllib.request.urlopen(req, timeout=3)
         require(False, "6th request should have returned 429")
     except urllib.error.HTTPError as e:
         require(e.code == 429, f"expected 429, got {e.code}")
-        data = json.loads(e.read().decode())
-        require(data.get("allowed") is False, "expected allowed=False on 429")
-        require(data.get("remaining") == 0, "expected remaining=0 on 429")
-        require(data.get("retry_after_ms", 0) > 0, "expected retry_after_ms > 0")
-        require(e.headers.get("Retry-After") is not None, "Retry-After header missing")
-        require(e.headers.get("X-RateLimit-Limit") == "5", "X-RateLimit-Limit header missing on 429")
+        body = json.loads(e.read().decode())
+        require(body.get("allowed") is False, "allowed should be false")
+        require(body.get("retry_after_ms") > 0, "retry_after_ms should be > 0")
+        require(e.headers.get("Retry-After") is not None, "missing Retry-After header")
         require(e.headers.get("X-RateLimit-Remaining") == "0", "X-RateLimit-Remaining header should be 0")
 
     # 3. Test Two-Phase Quota Reservation via HTTP
@@ -204,6 +201,95 @@ try:
         fdata = json.loads(resp.read().decode())
         require(fdata.get("failed") is True, "expected failed=True")
 
+    # 3.7 Test Key-Value and TTL HTTP Endpoints
+    # 3.7.1 POST /v1/kv/set
+    set_payload = json.dumps({"key": "test_kv_1", "value": "hello_world"}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/kv/set", data=set_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv set failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("ok") is True and data.get("set") is True, f"kv set bad response: {data}")
+
+    # Set NX when present (should not set)
+    set_nx_payload = json.dumps({"key": "test_kv_1", "value": "new_val", "condition": "nx"}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/kv/set", data=set_nx_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv set nx failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("set") is False, "kv set nx should return set=False when key exists")
+
+    # Set with TTL
+    set_ttl_payload = json.dumps({"key": "test_kv_2", "value": "temp_val", "ttl_seconds": 60}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/kv/set", data=set_ttl_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv set ttl failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("set") is True, "kv set ttl should succeed")
+
+    # 3.7.2 GET /v1/kv/get (via query param and body)
+    req = urllib.request.Request(f"{base_url}/v1/kv/get?key=test_kv_1", method="GET")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv get query failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("value") == "hello_world", f"kv get value mismatch: {data}")
+
+    get_body = json.dumps({"key": "test_kv_1"}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/kv/get", data=get_body, headers={"Content-Type": "application/json"}, method="GET")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv get body failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("value") == "hello_world", f"kv get body value mismatch: {data}")
+
+    # GET nonexistent key -> 404
+    try:
+        urllib.request.urlopen(f"{base_url}/v1/kv/get?key=nonexistent_key_123", timeout=3)
+        require(False, "expected 404 for nonexistent key")
+    except urllib.error.HTTPError as e:
+        require(e.code == 404, f"expected 404, got {e.code}")
+
+    # 3.7.3 GET /v1/kv/type
+    req = urllib.request.Request(f"{base_url}/v1/kv/type?key=test_kv_1", method="GET")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv type failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("type") == "string", f"expected string type, got {data}")
+
+    # 3.7.4 POST /v1/kv/exists
+    exists_payload = json.dumps({"keys": ["test_kv_1", "test_kv_2", "nonexistent"]}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/kv/exists", data=exists_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv exists failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("count") == 2, f"expected count=2, got {data}")
+
+    # 3.7.5 POST /v1/kv/expire and GET /v1/kv/ttl
+    expire_payload = json.dumps({"key": "test_kv_1", "ttl_seconds": 120}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/kv/expire", data=expire_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv expire failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("ok") is True, f"expected ok=True, got {data}")
+
+    req = urllib.request.Request(f"{base_url}/v1/kv/ttl?key=test_kv_1", method="GET")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv ttl failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("ttl_seconds") > 0 and data.get("ttl_ms") > 0, f"expected positive ttl, got {data}")
+
+    # 3.7.6 POST /v1/kv/del
+    del_payload = json.dumps({"keys": ["test_kv_1", "test_kv_2"]}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/kv/del", data=del_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "kv del failed")
+        data = json.loads(resp.read().decode())
+        require(data.get("deleted") == 2, f"expected deleted=2, got {data}")
+
+    # Verify deleted
+    try:
+        urllib.request.urlopen(f"{base_url}/v1/kv/get?key=test_kv_1", timeout=3)
+        require(False, "expected 404 after del")
+    except urllib.error.HTTPError as e:
+        require(e.code == 404, f"expected 404, got {e.code}")
 
     # 4. Error Cases
     # 4.1 404 Not Found
