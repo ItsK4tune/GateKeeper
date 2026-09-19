@@ -185,8 +185,14 @@ Connection semantics support request pipelining over persistent connections. Pip
 
 GateKeeper implements the **Sliding Window Counter - Hybrid** algorithm. It computes a weighted sum of requests between the previous window and the current window:
 
-$$\text{weight} = \frac{\text{window\_ms} - (\text{now\_ms} \bmod \text{window\_ms})}{\text{window\_ms}}$$
-$$\text{estimated\_count} = \text{previous\_count} \times \text{weight} + \text{current\_count}$$
+$$\text{weight} = \frac{W - (T \bmod W)}{W}$$
+$$\text{estimated count} = N_{\text{prev}} \times \text{weight} + N_{\text{curr}}$$
+
+Where:
+- $W$: Window duration in milliseconds (`window_ms`)
+- $T$: Current timestamp in milliseconds (`now_ms`)
+- $N_{\text{prev}}$: Request count in previous window
+- $N_{\text{curr}}$: Request count in current window
 
 - **Zero Boundary Burst**: Smooths out traffic spikes at window transitions.
 - **$O(1)$ Memory & CPU**: Requires only two counters per key, avoiding the linear RAM overhead of Sliding Window Log.
@@ -527,8 +533,14 @@ Giao thức GateKeeper Wire Protocol (phiên bản 1) hoạt động trên nền
 
 GateKeeper triển khai thuật toán **Sliding Window Counter - Hybrid**, kết hợp trọng số giữa cửa sổ trước và cửa sổ hiện tại:
 
-$$\text{weight} = \frac{\text{window\_ms} - (\text{now\_ms} \bmod \text{window\_ms})}{\text{window\_ms}}$$
-$$\text{estimated\_count} = \text{previous\_count} \times \text{weight} + \text{current\_count}$$
+$$\text{weight} = \frac{W - (T \bmod W)}{W}$$
+$$\text{estimated count} = N_{\text{prev}} \times \text{weight} + N_{\text{curr}}$$
+
+Trong đó:
+- $W$: Độ dài cửa sổ tính theo mili-giây (`window_ms`)
+- $T$: Thời điểm hiện tại tính theo mili-giây (`now_ms`)
+- $N_{\text{prev}}$: Số lượng request của cửa sổ trước
+- $N_{\text{curr}}$: Số lượng request của cửa sổ hiện tại
 
 - **Triệt tiêu Boundary Burst**: Làm mượt lưu lượng tại thời điểm giao thoa giữa hai cửa sổ.
 - **Tiết kiệm tài nguyên $O(1)$**: Chỉ cần lưu 2 giá trị bộ đếm cho mỗi key, không gây tốn RAM như Sliding Window Log.
