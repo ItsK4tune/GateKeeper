@@ -1,0 +1,21 @@
+{
+  "protocol": "GKWP/2",
+  "operation": "get",
+  "target": "127.0.0.1:8080",
+  "concurrency": 50,
+  "duration_sec": 2.155492198,
+  "total_requests": 50000,
+  "successful": 50000,
+  "failed": 0,
+  "qps": 23196.558097678626,
+  "latencies_ms": {
+    "min": 0.045,
+    "avg": 2.104,
+    "p50": 1.999,
+    "p90": 3.048,
+    "p95": 3.707,
+    "p99": 4.705,
+    "p999": 5.639,
+    "max": 8.093
+  }
+}
