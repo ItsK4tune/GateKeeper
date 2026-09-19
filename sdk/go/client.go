@@ -17,12 +17,13 @@ var (
 	ErrRateLimited         = errors.New("gatekeeper: rate limit exceeded")
 	ErrQuotaExceeded       = errors.New("gatekeeper: quota exceeded")
 	ErrReservationNotFound = errors.New("gatekeeper: reservation not found or expired")
-	ErrBadRequest          = errors.New("gatekeeper: bad request")
-	ErrInternal            = errors.New("gatekeeper: internal server error")
 )
 
 type Client struct {
 	endpoint   string
+	useHTTP    bool
+	timeout    time.Duration
+	tcpClient  *TCPClient
 	httpClient *http.Client
 }
 
@@ -34,16 +35,42 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	}
 }
 
+func WithHTTP() Option {
+	return func(c *Client) {
+		c.useHTTP = true
+	}
+}
+
+func WithTCP() Option {
+	return func(c *Client) {
+		c.useHTTP = false
+	}
+}
+
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *Client) {
-		c.httpClient.Timeout = timeout
+		c.timeout = timeout
+		if c.httpClient != nil {
+			c.httpClient.Timeout = timeout
+		}
+		if c.tcpClient != nil {
+			c.tcpClient.timeout = timeout
+		}
 	}
 }
 
 func NewClient(endpoint string, opts ...Option) *Client {
+	if endpoint == "" {
+		endpoint = "127.0.0.1:63779"
+	}
 	endpoint = strings.TrimRight(endpoint, "/")
+
+	useHTTP := strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://")
+
 	c := &Client{
 		endpoint: endpoint,
+		useHTTP:  useHTTP,
+		timeout:  5 * time.Second,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -51,7 +78,31 @@ func NewClient(endpoint string, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+
+	if !c.useHTTP {
+		tcpAddr := c.endpoint
+		tcpAddr = strings.TrimPrefix(tcpAddr, "tcp://")
+		c.tcpClient = NewTCPClient(tcpAddr, c.timeout)
+	}
+
 	return c
+}
+
+func NewTCPClientInstance(addr string, opts ...Option) *Client {
+	opts = append([]Option{WithTCP()}, opts...)
+	return NewClient(addr, opts...)
+}
+
+func NewHTTPClient(endpoint string, opts ...Option) *Client {
+	opts = append([]Option{WithHTTP()}, opts...)
+	return NewClient(endpoint, opts...)
+}
+
+func (c *Client) Close() error {
+	if c.tcpClient != nil {
+		return c.tcpClient.Close()
+	}
+	return nil
 }
 
 type RateLimitRequest struct {
@@ -74,6 +125,25 @@ type RateLimitResponse struct {
 }
 
 func (c *Client) CheckRateLimit(ctx context.Context, req RateLimitRequest) (*RateLimitResponse, error) {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.RATE_LIMIT", req)
+		if err != nil {
+			return nil, err
+		}
+		if !resp.OK {
+			return nil, resp.Error
+		}
+		var res RateLimitResponse
+		if err := json.Unmarshal(resp.Result, &res); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+		res.Limit = req.Limit
+		if !res.Allowed {
+			return &res, ErrRateLimited
+		}
+		return &res, nil
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -136,6 +206,24 @@ type ReserveQuotaResponse struct {
 }
 
 func (c *Client) ReserveQuota(ctx context.Context, req ReserveQuotaRequest) (*ReserveQuotaResponse, error) {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.RESERVE", req)
+		if err != nil {
+			return nil, err
+		}
+		if !resp.OK {
+			return nil, resp.Error
+		}
+		var res ReserveQuotaResponse
+		if err := json.Unmarshal(resp.Result, &res); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+		if !res.Reserved {
+			return &res, ErrQuotaExceeded
+		}
+		return &res, nil
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -187,6 +275,24 @@ type CommitQuotaResponse struct {
 }
 
 func (c *Client) CommitQuota(ctx context.Context, req CommitQuotaRequest) (*CommitQuotaResponse, error) {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.COMMIT", req)
+		if err != nil {
+			return nil, err
+		}
+		if !resp.OK {
+			if resp.Error != nil && resp.Error.Code == "ERR_NOT_FOUND" {
+				return nil, ErrReservationNotFound
+			}
+			return nil, resp.Error
+		}
+		var res CommitQuotaResponse
+		if err := json.Unmarshal(resp.Result, &res); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+		return &res, nil
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -236,6 +342,24 @@ type RollbackQuotaResponse struct {
 }
 
 func (c *Client) RollbackQuota(ctx context.Context, req RollbackQuotaRequest) (*RollbackQuotaResponse, error) {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.ROLLBACK", req)
+		if err != nil {
+			return nil, err
+		}
+		if !resp.OK {
+			if resp.Error != nil && resp.Error.Code == "ERR_NOT_FOUND" {
+				return nil, ErrReservationNotFound
+			}
+			return nil, resp.Error
+		}
+		var res RollbackQuotaResponse
+		if err := json.Unmarshal(resp.Result, &res); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+		return &res, nil
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -281,6 +405,18 @@ func (c *Client) InitQuota(ctx context.Context, key string, quota uint64, ttlMs 
 	if ttlMs > 0 {
 		payload["ttl_ms"] = ttlMs
 	}
+
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.QUOTA_INIT", payload)
+		if err != nil {
+			return err
+		}
+		if !resp.OK {
+			return resp.Error
+		}
+		return nil
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
@@ -306,6 +442,14 @@ func (c *Client) InitQuota(ctx context.Context, key string, quota uint64, ttlMs 
 }
 
 func (c *Client) Health(ctx context.Context) (bool, error) {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "PING", map[string]any{})
+		if err != nil {
+			return false, err
+		}
+		return resp.OK, nil
+	}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/healthz", nil)
 	if err != nil {
 		return false, fmt.Errorf("create request: %w", err)

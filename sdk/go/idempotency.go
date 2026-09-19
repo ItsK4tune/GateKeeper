@@ -54,6 +54,24 @@ type IdempotencyFailRequest struct {
 }
 
 func (c *Client) IdemBegin(ctx context.Context, req IdempotencyBeginRequest) (*IdempotencyBeginResponse, error) {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.IDEM_BEGIN", req)
+		if err != nil {
+			return nil, err
+		}
+		if !resp.OK {
+			if resp.Error != nil && resp.Error.Code == "ERR_IDEMPOTENCY_CONFLICT" {
+				return nil, ErrIdempotencyConflict
+			}
+			return nil, resp.Error
+		}
+		var res IdempotencyBeginResponse
+		if err := json.Unmarshal(resp.Result, &res); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+		return &res, nil
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -92,6 +110,20 @@ func (c *Client) IdemBegin(ctx context.Context, req IdempotencyBeginRequest) (*I
 }
 
 func (c *Client) IdemComplete(ctx context.Context, req IdempotencyCompleteRequest) error {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.IDEM_COMPLETE", req)
+		if err != nil {
+			return err
+		}
+		if !resp.OK {
+			if resp.Error != nil && resp.Error.Code == "ERR_TOKEN_MISMATCH" {
+				return ErrTokenMismatch
+			}
+			return resp.Error
+		}
+		return nil
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
@@ -125,6 +157,20 @@ func (c *Client) IdemComplete(ctx context.Context, req IdempotencyCompleteReques
 }
 
 func (c *Client) IdemFail(ctx context.Context, req IdempotencyFailRequest) error {
+	if !c.useHTTP {
+		resp, err := c.tcpClient.Send(ctx, "GK.IDEM_FAIL", req)
+		if err != nil {
+			return err
+		}
+		if !resp.OK {
+			if resp.Error != nil && resp.Error.Code == "ERR_TOKEN_MISMATCH" {
+				return ErrTokenMismatch
+			}
+			return resp.Error
+		}
+		return nil
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)

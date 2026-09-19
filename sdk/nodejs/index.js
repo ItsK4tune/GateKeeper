@@ -1,11 +1,29 @@
 'use strict';
 
-const { GateKeeperClient, GateKeeperError, RateLimitError, QuotaError } = require('./client');
+const {
+  GateKeeperClient,
+  GateKeeperHttpClient,
+  GateKeeperTcpClient,
+  GateKeeperError,
+  RateLimitError,
+  QuotaError,
+} = require('./client');
 const { createRateLimitMiddleware, defaultKeyExtractor } = require('./middleware');
-const { createIdempotencyMiddleware, IdempotencyConflictError, defaultHashCalculator } = require('./idempotency');
+const {
+  createIdempotencyMiddleware,
+  IdempotencyConflictError,
+  defaultHashCalculator,
+} = require('./idempotency');
+const {
+  GateKeeperModule,
+  GateKeeperService,
+  GATEKEEPER_OPTIONS,
+} = require('./nestjs');
 
 module.exports = {
   GateKeeperClient,
+  GateKeeperHttpClient,
+  GateKeeperTcpClient,
   GateKeeperError,
   RateLimitError,
   QuotaError,
@@ -14,4 +32,7 @@ module.exports = {
   createIdempotencyMiddleware,
   IdempotencyConflictError,
   defaultHashCalculator,
+  GateKeeperModule,
+  GateKeeperService,
+  GATEKEEPER_OPTIONS,
 };

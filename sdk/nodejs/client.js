@@ -1,31 +1,9 @@
 'use strict';
 
-class GateKeeperError extends Error {
-  constructor(message, status, data) {
-    super(message);
-    this.name = 'GateKeeperError';
-    this.status = status;
-    this.data = data;
-  }
-}
+const { GateKeeperError, RateLimitError, QuotaError } = require('./errors');
+const { GateKeeperTcpClient } = require('./tcp_client');
 
-class RateLimitError extends GateKeeperError {
-  constructor(message, info) {
-    super(message, 429, info);
-    this.name = 'RateLimitError';
-    this.info = info;
-  }
-}
-
-class QuotaError extends GateKeeperError {
-  constructor(message, info) {
-    super(message, 429, info);
-    this.name = 'QuotaError';
-    this.info = info;
-  }
-}
-
-class GateKeeperClient {
+class GateKeeperHttpClient {
   constructor(options = {}) {
     if (typeof options === 'string') {
       options = { endpoint: options };
@@ -159,6 +137,39 @@ class GateKeeperClient {
     };
   }
 
+  async rollbackQuota({ key, reservationId }) {
+    const res = await this._request('/v1/quota/rollback', 'POST', {
+      key,
+      reservation_id: reservationId,
+    });
+
+    if (res.status === 404) {
+      throw new GateKeeperError('Reservation not found or expired', 404, res.data);
+    }
+
+    if (res.status !== 200) {
+      throw new GateKeeperError(`Quota rollback failed with status ${res.status}`, res.status, res.data);
+    }
+
+    return {
+      rolledBack: !!res.data.rolled_back,
+      refunded: res.data.refunded,
+      remaining: res.data.remaining,
+    };
+  }
+
+  async initQuota({ key, quota, ttlMs = 0 }) {
+    const payload = { key, quota };
+    if (ttlMs > 0) {
+      payload.ttl_ms = ttlMs;
+    }
+    const res = await this._request('/v1/quota/init', 'POST', payload);
+    if (res.status !== 200) {
+      throw new GateKeeperError(`Init quota failed with status ${res.status}`, res.status, res.data);
+    }
+    return res.data;
+  }
+
   async idemBegin({ key, requestHash, ttlMs, ownerToken }) {
     const body = { key, request_hash: requestHash };
     if (ttlMs !== undefined) body.ttl_ms = ttlMs;
@@ -198,42 +209,78 @@ class GateKeeperClient {
     return res.data;
   }
 
-  async rollbackQuota({ key, reservationId }) {
-    const res = await this._request('/v1/quota/rollback', 'POST', {
-      key,
-      reservation_id: reservationId,
-    });
+  close() {}
+}
 
-    if (res.status === 404) {
-      throw new GateKeeperError('Reservation not found or expired', 404, res.data);
+class GateKeeperClient {
+  constructor(options = {}) {
+    let useHttp = false;
+    if (typeof options === 'string') {
+      if (options.startsWith('http://') || options.startsWith('https://')) {
+        useHttp = true;
+      }
+    } else {
+      if (
+        options.useHttp ||
+        options.protocol === 'http' ||
+        (options.endpoint && (options.endpoint.startsWith('http://') || options.endpoint.startsWith('https://')))
+      ) {
+        useHttp = true;
+      }
     }
 
-    if (res.status !== 200) {
-      throw new GateKeeperError(`Quota rollback failed with status ${res.status}`, res.status, res.data);
+    if (useHttp) {
+      this.driver = new GateKeeperHttpClient(options);
+    } else {
+      this.driver = new GateKeeperTcpClient(options);
     }
-
-    return {
-      rolledBack: !!res.data.rolled_back,
-      refunded: res.data.refunded,
-      remaining: res.data.remaining,
-    };
   }
 
-  async initQuota({ key, quota, ttlMs = 0 }) {
-    const payload = { key, quota };
-    if (ttlMs > 0) {
-      payload.ttl_ms = ttlMs;
-    }
-    const res = await this._request('/v1/quota/init', 'POST', payload);
-    if (res.status !== 200) {
-      throw new GateKeeperError(`Init quota failed with status ${res.status}`, res.status, res.data);
-    }
-    return res.data;
+  health() {
+    return this.driver.health();
+  }
+
+  checkRateLimit(req) {
+    return this.driver.checkRateLimit(req);
+  }
+
+  reserveQuota(req) {
+    return this.driver.reserveQuota(req);
+  }
+
+  commitQuota(req) {
+    return this.driver.commitQuota(req);
+  }
+
+  rollbackQuota(req) {
+    return this.driver.rollbackQuota(req);
+  }
+
+  initQuota(req) {
+    return this.driver.initQuota(req);
+  }
+
+  idemBegin(req) {
+    return this.driver.idemBegin(req);
+  }
+
+  idemComplete(req) {
+    return this.driver.idemComplete(req);
+  }
+
+  idemFail(req) {
+    return this.driver.idemFail(req);
+  }
+
+  close() {
+    return this.driver.close();
   }
 }
 
 module.exports = {
   GateKeeperClient,
+  GateKeeperHttpClient,
+  GateKeeperTcpClient,
   GateKeeperError,
   RateLimitError,
   QuotaError,
