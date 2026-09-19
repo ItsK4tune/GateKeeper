@@ -50,6 +50,7 @@ public:
 private:
     mutable std::mutex mutex_;
     mutable HashTable<std::string, Entry> entries_;
+    mutable HashTable<std::string, RateLimitRecord> rate_limits_;
     mutable HashTable<std::string, Reservation> reservations_;
     mutable HashTable<std::string, IdempotencyRecord> idempotency_records_;
     mutable std::uint64_t next_reservation_seq_{1};

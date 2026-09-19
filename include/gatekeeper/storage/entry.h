@@ -49,6 +49,21 @@ struct RateLimitResult
     std::string error_message;
 };
 
+struct RateLimitRecord
+{
+    std::string key;
+    std::uint64_t current_window_idx{0};
+    std::uint64_t current_count{0};
+    std::uint64_t previous_count{0};
+    std::uint64_t window_ms{0};
+    std::uint64_t expire_at_ms{0};
+
+    [[nodiscard]] bool IsExpired(std::uint64_t now_ms) const noexcept
+    {
+        return expire_at_ms > 0 && now_ms >= expire_at_ms;
+    }
+};
+
 struct Reservation
 {
     std::string id;

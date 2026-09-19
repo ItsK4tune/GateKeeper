@@ -81,6 +81,24 @@ void TestRateLimit()
     Require(r4.result_json.find(R"("allowed":true)") != std::string::npos, "rl 4 allowed after reset");
 }
 
+void TestSlidingWindowHybrid()
+{
+    Dispatcher d;
+    for (int i = 0; i < 10; ++i)
+    {
+        auto r = d.Dispatch({"sw", "GK.RATE_LIMIT", R"({"key":"rl:hybrid","limit":10,"window_ms":100})"});
+        Require(r.ok && r.result_json.find(R"("allowed":true)") != std::string::npos, "initial 10 requests allowed");
+    }
+
+    auto r_rej = d.Dispatch({"sw", "GK.RATE_LIMIT", R"({"key":"rl:hybrid","limit":10,"window_ms":100})"});
+    Require(r_rej.ok && r_rej.result_json.find(R"("allowed":false)") != std::string::npos, "11th request rejected");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    auto r_next = d.Dispatch({"sw", "GK.RATE_LIMIT", R"({"key":"rl:hybrid","limit":10,"window_ms":100})"});
+    Require(r_next.ok && r_next.result_json.find(R"("allowed":true)") != std::string::npos, "request in new window allowed");
+}
+
 }
 
 int main()
@@ -88,6 +106,7 @@ int main()
     TestIncrDecr();
     TestIncrNonInteger();
     TestRateLimit();
+    TestSlidingWindowHybrid();
     std::cout << "All counter and rate limit tests passed!\n";
     return 0;
 }

@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/storage/memory_store.h"
+#include "gatekeeper/storage/memory_store.h"
 
 #include <chrono>
 #include <limits>
@@ -370,65 +370,80 @@ RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit
     const std::lock_guard lock(mutex_);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
-    if (existing != nullptr && existing->meta.IsExpired(now))
-    {
-        entries_.Erase(key_str);
-        existing = nullptr;
-    }
 
-    if (existing == nullptr)
+    const auto current_idx = now / window_ms;
+    const auto elapsed_in_window = now % window_ms;
+
+    auto* record = rate_limits_.Find(key_str);
+    if (record != nullptr)
     {
-        if (cost <= limit)
+        if (record->IsExpired(now))
         {
-            const auto expire_at = now + window_ms;
-            Entry entry{key_str, std::to_string(cost), EntryMetadata{DataType::String, now, expire_at}};
-            entries_.Insert(key_str, std::move(entry));
-            const auto remaining = limit - cost;
-            return {true, true, remaining, 0, {}, {}};
+            record->current_window_idx = current_idx;
+            record->current_count = 0;
+            record->previous_count = 0;
+            record->window_ms = window_ms;
+            record->expire_at_ms = (current_idx + 2) * window_ms;
+        }
+        else if (record->window_ms != window_ms)
+        {
+            record->window_ms = window_ms;
+            record->current_window_idx = current_idx;
+            record->current_count = 0;
+            record->previous_count = 0;
+            record->expire_at_ms = (current_idx + 2) * window_ms;
         }
         else
         {
-            return {true, false, 0, window_ms, {}, {}};
+            const auto diff = current_idx - record->current_window_idx;
+            if (diff == 1)
+            {
+                record->previous_count = record->current_count;
+                record->current_count = 0;
+                record->current_window_idx = current_idx;
+                record->expire_at_ms = (current_idx + 2) * window_ms;
+            }
+            else if (diff > 1)
+            {
+                record->previous_count = 0;
+                record->current_count = 0;
+                record->current_window_idx = current_idx;
+                record->expire_at_ms = (current_idx + 2) * window_ms;
+            }
         }
-    }
-
-    std::uint64_t current_count = 0;
-    try
-    {
-        std::size_t idx = 0;
-        current_count = std::stoull(existing->value, &idx);
-        if (idx != existing->value.size())
-        {
-            return {false, false, 0, 0, "ERR_NOT_AN_INTEGER", "value is not an integer"};
-        }
-    }
-    catch (...)
-    {
-        return {false, false, 0, 0, "ERR_NOT_AN_INTEGER", "value is not an integer"};
-    }
-
-    std::uint64_t retry_after = 0;
-    if (existing->meta.expire_at_ms > now)
-    {
-        retry_after = existing->meta.expire_at_ms - now;
     }
     else
     {
-        existing->meta.expire_at_ms = now + window_ms;
-        retry_after = window_ms;
+        RateLimitRecord new_rec;
+        new_rec.key = key_str;
+        new_rec.current_window_idx = current_idx;
+        new_rec.current_count = 0;
+        new_rec.previous_count = 0;
+        new_rec.window_ms = window_ms;
+        new_rec.expire_at_ms = (current_idx + 2) * window_ms;
+        rate_limits_.Insert(key_str, std::move(new_rec));
+        record = rate_limits_.Find(key_str);
     }
 
-    if (current_count + cost <= limit)
+    const double weight_prev = 1.0 - (static_cast<double>(elapsed_in_window) / static_cast<double>(window_ms));
+    const auto estimated_count = static_cast<std::uint64_t>(record->previous_count * weight_prev) + record->current_count;
+
+    if (estimated_count + cost <= limit)
     {
-        current_count += cost;
-        existing->value = std::to_string(current_count);
-        const auto remaining = limit - current_count;
+        record->current_count += cost;
+        const auto remaining = limit - (estimated_count + cost);
         return {true, true, remaining, 0, {}, {}};
     }
 
-    return {true, false, limit >= current_count ? limit - current_count : 0, retry_after, {}, {}};
+    const auto remaining = limit >= estimated_count ? limit - estimated_count : 0;
+    auto retry_after = window_ms - elapsed_in_window;
+    if (retry_after == 0)
+    {
+        retry_after = 1;
+    }
+    return {true, false, remaining, retry_after, {}, {}};
 }
+
 
 ReservationResult MemoryStore::ReserveQuota(std::string_view key, std::uint64_t amount, std::uint64_t ttl_ms)
 {
@@ -847,7 +862,19 @@ std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
         idempotency_records_.Erase(k);
     }
 
-    return expired_keys.size() + expired_reservations.size() + expired_idempotencies.size();
+    std::vector<std::string> expired_rate_limits;
+    rate_limits_.ForEach([&](const std::string& k, const RateLimitRecord& rec) {
+        if (expired_rate_limits.size() < sample_limit && rec.IsExpired(now))
+        {
+            expired_rate_limits.push_back(k);
+        }
+    });
+    for (const auto& k : expired_rate_limits)
+    {
+        rate_limits_.Erase(k);
+    }
+
+    return expired_keys.size() + expired_reservations.size() + expired_idempotencies.size() + expired_rate_limits.size();
 }
 
 }
