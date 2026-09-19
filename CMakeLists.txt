@@ -115,6 +115,10 @@ if(BUILD_TESTING)
     target_link_libraries(reservation_commands_tests PRIVATE gk_commands)
     add_test(NAME reservation_commands_tests COMMAND reservation_commands_tests)
 
+    add_executable(idempotency_state_tests tests/domain/idempotency/idempotency_state_test.cpp)
+    target_link_libraries(idempotency_state_tests PRIVATE gk_storage)
+    add_test(NAME idempotency_state_tests COMMAND idempotency_state_tests)
+
     add_executable(concurrent_clients_tests tests/net/concurrent_clients_test.cpp)
     target_link_libraries(concurrent_clients_tests PRIVATE gk_net gk_storage)
     add_test(NAME concurrent_clients_tests COMMAND concurrent_clients_tests)

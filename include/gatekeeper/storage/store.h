@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/storage/entry.h"
 
@@ -47,6 +47,11 @@ public:
     virtual ReservationResult ReserveQuota(std::string_view key, std::uint64_t amount, std::uint64_t ttl_ms) = 0;
     virtual CommitResult CommitQuota(std::string_view key, std::string_view reservation_id, std::uint64_t actual_amount) = 0;
     virtual RollbackResult RollbackQuota(std::string_view key, std::string_view reservation_id) = 0;
+
+    virtual IdempotencyBeginResult IdemBegin(std::string_view key, std::string_view request_hash, std::uint64_t ttl_ms, std::string_view owner_token) = 0;
+    virtual IdempotencyCompleteResult IdemComplete(std::string_view key, std::string_view owner_token, int response_code, std::string_view response_body) = 0;
+    virtual IdempotencyFailResult IdemFail(std::string_view key, std::string_view owner_token, std::string_view error_message) = 0;
+    virtual std::optional<IdempotencyRecord> IdemGet(std::string_view key) const = 0;
 };
 
 }

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -90,6 +90,66 @@ struct RollbackResult
     bool rolled_back{false};
     std::uint64_t refunded{0};
     std::uint64_t remaining{0};
+    std::string error_code;
+    std::string error_message;
+};
+
+enum class IdempotencyStatus : std::uint8_t
+{
+    None = 0,
+    InProgress = 1,
+    Completed = 2,
+    Failed = 3
+};
+
+struct IdempotencyRecord
+{
+    std::string key;
+    std::string request_hash;
+    IdempotencyStatus status{IdempotencyStatus::None};
+    int response_code{0};
+    std::string response_body;
+    std::string owner_token;
+    std::uint64_t created_at_ms{0};
+    std::uint64_t expire_at_ms{0};
+
+    [[nodiscard]] bool IsExpired(std::uint64_t now_ms) const noexcept
+    {
+        return expire_at_ms > 0 && now_ms >= expire_at_ms;
+    }
+};
+
+enum class IdempotencyAction : std::uint8_t
+{
+    Execute = 0,
+    Park = 1,
+    Replay = 2,
+    Conflict = 3
+};
+
+struct IdempotencyBeginResult
+{
+    bool ok{true};
+    IdempotencyAction action{IdempotencyAction::Execute};
+    std::string owner_token;
+    int cached_code{0};
+    std::string cached_response;
+    std::string error_code;
+    std::string error_message;
+};
+
+struct IdempotencyCompleteResult
+{
+    bool ok{true};
+    bool completed{false};
+    std::string error_code;
+    std::string error_message;
+};
+
+struct IdempotencyFailResult
+{
+    bool ok{true};
+    bool failed{false};
     std::string error_code;
     std::string error_message;
 };

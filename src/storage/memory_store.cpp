@@ -616,6 +616,173 @@ RollbackResult MemoryStore::RollbackQuota(std::string_view key, std::string_view
     return {true, true, refund_amount, balance, {}, {}};
 }
 
+IdempotencyBeginResult MemoryStore::IdemBegin(
+    std::string_view key,
+    std::string_view request_hash,
+    std::uint64_t ttl_ms,
+    std::string_view owner_token)
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto key_str = std::string(key);
+
+    auto* record = idempotency_records_.Find(key_str);
+    if (record != nullptr && record->IsExpired(now))
+    {
+        idempotency_records_.Erase(key_str);
+        record = nullptr;
+    }
+
+    if (record == nullptr)
+    {
+        std::string token = owner_token.empty()
+            ? ("idem_" + std::to_string(now) + "_" + std::to_string(next_idempotency_seq_++))
+            : std::string(owner_token);
+
+        IdempotencyRecord rec;
+        rec.key = key_str;
+        rec.request_hash = std::string(request_hash);
+        rec.status = IdempotencyStatus::InProgress;
+        rec.owner_token = token;
+        rec.created_at_ms = now;
+        rec.expire_at_ms = ttl_ms > 0 ? (now + ttl_ms) : 0;
+        rec.response_code = 0;
+        rec.response_body = "";
+
+        idempotency_records_.Insert(key_str, std::move(rec));
+        return {true, IdempotencyAction::Execute, token, 0, "", {}, {}};
+    }
+
+    if (record->request_hash != request_hash)
+    {
+        return {false, IdempotencyAction::Conflict, "", 0, "", "ERR_IDEMPOTENCY_CONFLICT", "Request hash mismatch for idempotency key"};
+    }
+
+    if (record->status == IdempotencyStatus::InProgress)
+    {
+        if (!owner_token.empty() && record->owner_token == owner_token)
+        {
+            return {true, IdempotencyAction::Execute, record->owner_token, 0, "", {}, {}};
+        }
+        return {true, IdempotencyAction::Park, record->owner_token, 0, "", {}, {}};
+    }
+
+    if (record->status == IdempotencyStatus::Completed)
+    {
+        return {true, IdempotencyAction::Replay, record->owner_token, record->response_code, record->response_body, {}, {}};
+    }
+
+    if (record->status == IdempotencyStatus::Failed)
+    {
+        std::string token = owner_token.empty()
+            ? ("idem_" + std::to_string(now) + "_" + std::to_string(next_idempotency_seq_++))
+            : std::string(owner_token);
+
+        record->status = IdempotencyStatus::InProgress;
+        record->owner_token = token;
+        record->created_at_ms = now;
+        record->expire_at_ms = ttl_ms > 0 ? (now + ttl_ms) : 0;
+        record->response_code = 0;
+        record->response_body = "";
+
+        return {true, IdempotencyAction::Execute, token, 0, "", {}, {}};
+    }
+
+    return {false, IdempotencyAction::Conflict, "", 0, "", "ERR_UNKNOWN_STATUS", "Unknown idempotency status"};
+}
+
+IdempotencyCompleteResult MemoryStore::IdemComplete(
+    std::string_view key,
+    std::string_view owner_token,
+    int response_code,
+    std::string_view response_body)
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto key_str = std::string(key);
+
+    auto* record = idempotency_records_.Find(key_str);
+    if (record == nullptr)
+    {
+        return {false, false, "ERR_NOT_FOUND", "Idempotency record not found"};
+    }
+
+    if (record->IsExpired(now))
+    {
+        idempotency_records_.Erase(key_str);
+        return {false, false, "ERR_EXPIRED", "Idempotency record has expired"};
+    }
+
+    if (!owner_token.empty() && record->owner_token != owner_token)
+    {
+        return {false, false, "ERR_TOKEN_MISMATCH", "Owner token mismatch"};
+    }
+
+    if (record->status == IdempotencyStatus::Completed)
+    {
+        return {true, true, {}, {}};
+    }
+
+    record->status = IdempotencyStatus::Completed;
+    record->response_code = response_code;
+    record->response_body = std::string(response_body);
+
+    return {true, true, {}, {}};
+}
+
+IdempotencyFailResult MemoryStore::IdemFail(
+    std::string_view key,
+    std::string_view owner_token,
+    std::string_view error_message)
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto key_str = std::string(key);
+
+    auto* record = idempotency_records_.Find(key_str);
+    if (record == nullptr)
+    {
+        return {false, false, "ERR_NOT_FOUND", "Idempotency record not found"};
+    }
+
+    if (record->IsExpired(now))
+    {
+        idempotency_records_.Erase(key_str);
+        return {false, false, "ERR_EXPIRED", "Idempotency record has expired"};
+    }
+
+    if (!owner_token.empty() && record->owner_token != owner_token)
+    {
+        return {false, false, "ERR_TOKEN_MISMATCH", "Owner token mismatch"};
+    }
+
+    record->status = IdempotencyStatus::Failed;
+    record->response_body = std::string(error_message);
+
+    return {true, true, {}, {}};
+}
+
+std::optional<IdempotencyRecord> MemoryStore::IdemGet(std::string_view key) const
+{
+    const std::lock_guard lock(mutex_);
+    const auto now = CurrentTimeMs();
+    const auto key_str = std::string(key);
+
+    auto* record = idempotency_records_.Find(key_str);
+    if (record == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    if (record->IsExpired(now))
+    {
+        idempotency_records_.Erase(key_str);
+        return std::nullopt;
+    }
+
+    return *record;
+}
+
 std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
 {
     const std::lock_guard lock(mutex_);
@@ -668,7 +835,19 @@ std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
         }
     }
 
-    return expired_keys.size() + expired_reservations.size();
+    std::vector<std::string> expired_idempotencies;
+    idempotency_records_.ForEach([&](const std::string& k, const IdempotencyRecord& rec) {
+        if (expired_idempotencies.size() < sample_limit && rec.IsExpired(now))
+        {
+            expired_idempotencies.push_back(k);
+        }
+    });
+    for (const auto& k : expired_idempotencies)
+    {
+        idempotency_records_.Erase(k);
+    }
+
+    return expired_keys.size() + expired_reservations.size() + expired_idempotencies.size();
 }
 
 }

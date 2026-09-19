@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/storage/entry.h"
 #include "gatekeeper/storage/hash_table.h"
@@ -42,11 +42,18 @@ public:
     CommitResult CommitQuota(std::string_view key, std::string_view reservation_id, std::uint64_t actual_amount) override;
     RollbackResult RollbackQuota(std::string_view key, std::string_view reservation_id) override;
 
+    IdempotencyBeginResult IdemBegin(std::string_view key, std::string_view request_hash, std::uint64_t ttl_ms, std::string_view owner_token) override;
+    IdempotencyCompleteResult IdemComplete(std::string_view key, std::string_view owner_token, int response_code, std::string_view response_body) override;
+    IdempotencyFailResult IdemFail(std::string_view key, std::string_view owner_token, std::string_view error_message) override;
+    std::optional<IdempotencyRecord> IdemGet(std::string_view key) const override;
+
 private:
     mutable std::mutex mutex_;
     mutable HashTable<std::string, Entry> entries_;
     mutable HashTable<std::string, Reservation> reservations_;
+    mutable HashTable<std::string, IdempotencyRecord> idempotency_records_;
     mutable std::uint64_t next_reservation_seq_{1};
+    mutable std::uint64_t next_idempotency_seq_{1};
 };
 
 }
