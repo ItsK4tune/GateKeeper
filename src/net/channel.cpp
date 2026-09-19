@@ -2,6 +2,7 @@
 #include "gatekeeper/protocol/gkwp/frame.h"
 #include "gatekeeper/protocol/gkwp/response.h"
 #include "gatekeeper/protocol/gkwp2/frame.h"
+#include "gatekeeper/protocol/resp/encoder.h"
 
 #include <array>
 #include <cerrno>
@@ -74,7 +75,12 @@ void Channel::HandleRead()
             std::string error;
             if (!session_.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), messages, error))
             {
-                if (session_.Protocol() == ProtocolType::Gkwp2)
+                if (session_.Protocol() == ProtocolType::Resp)
+                {
+                    const auto err_str = protocol::resp::FormatError(error);
+                    Send(std::span(reinterpret_cast<const std::uint8_t*>(err_str.data()), err_str.size()));
+                }
+                else if (session_.Protocol() == ProtocolType::Gkwp2)
                 {
                     const auto err_frame = protocol::gkwp2::EncodeError(0, 0, "PROTOCOL_ERROR", error, true);
                     Send(err_frame);
@@ -90,9 +96,22 @@ void Channel::HandleRead()
             for (const auto& msg : messages)
             {
                 session_.IncrementRequests();
-                const auto response = handler_(msg.payload);
-                if (msg.protocol == ProtocolType::Gkwp2)
+                if (msg.protocol == ProtocolType::Resp)
                 {
+                    if (msg.resp_direct_response)
+                    {
+                        Send(std::span(reinterpret_cast<const std::uint8_t*>(msg.resp_direct_content.data()), msg.resp_direct_content.size()));
+                    }
+                    else
+                    {
+                        const auto json_response = handler_(msg.payload);
+                        const auto resp_str = protocol::resp::FormatRespResponse(msg.resp_op, json_response, session_.RespVersion());
+                        Send(std::span(reinterpret_cast<const std::uint8_t*>(resp_str.data()), resp_str.size()));
+                    }
+                }
+                else if (msg.protocol == ProtocolType::Gkwp2)
+                {
+                    const auto response = handler_(msg.payload);
                     const auto resp_frame = protocol::gkwp2::EncodeResponse(
                         msg.request_id, msg.stream_id, response,
                         (msg.flags & protocol::gkwp2::flags::kEndStream) != 0);
@@ -100,6 +119,7 @@ void Channel::HandleRead()
                 }
                 else
                 {
+                    const auto response = handler_(msg.payload);
                     Send(protocol::EncodeFrame(response));
                 }
                 if (closed_)

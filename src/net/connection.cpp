@@ -3,6 +3,7 @@
 #include "gatekeeper/protocol/gkwp/frame.h"
 #include "gatekeeper/protocol/gkwp/response.h"
 #include "gatekeeper/protocol/gkwp2/frame.h"
+#include "gatekeeper/protocol/resp/encoder.h"
 
 #include <array>
 #include <cerrno>
@@ -79,7 +80,12 @@ void Connection::Serve()
         std::string error;
         if (!session_.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), messages, error))
         {
-            if (session_.Protocol() == ProtocolType::Gkwp2)
+            if (session_.Protocol() == ProtocolType::Resp)
+            {
+                const auto err_str = protocol::resp::FormatError(error);
+                SendAll(std::span(reinterpret_cast<const std::uint8_t*>(err_str.data()), err_str.size()));
+            }
+            else if (session_.Protocol() == ProtocolType::Gkwp2)
             {
                 const auto err_frame = protocol::gkwp2::EncodeError(0, 0, "PROTOCOL_ERROR", error, true);
                 logger_->Warn("Protocol error from client fd=" + std::to_string(client_fd_) + ": " + error);
@@ -98,10 +104,29 @@ void Connection::Serve()
         {
             session_.IncrementRequests();
             logger_->Debug("Processing request payload (" + std::to_string(msg.payload.size()) + " bytes) for fd=" + std::to_string(client_fd_));
-            const auto response = handler_(msg.payload);
-            if (msg.protocol == ProtocolType::Gkwp2)
+            if (msg.protocol == ProtocolType::Resp)
             {
-                logger_->Info("Sending GKWP/2 response to client fd=" + std::to_string(client_fd_) + ": " + response);
+                if (msg.resp_direct_response)
+                {
+                    if (!SendAll(std::span(reinterpret_cast<const std::uint8_t*>(msg.resp_direct_content.data()), msg.resp_direct_content.size())))
+                    {
+                        return;
+                    }
+                }
+                else
+                {
+                    const auto json_response = handler_(msg.payload);
+                    const auto resp_str = protocol::resp::FormatRespResponse(msg.resp_op, json_response, session_.RespVersion());
+                    if (!SendAll(std::span(reinterpret_cast<const std::uint8_t*>(resp_str.data()), resp_str.size())))
+                    {
+                        return;
+                    }
+                }
+            }
+            else if (msg.protocol == ProtocolType::Gkwp2)
+            {
+                logger_->Info("Sending GKWP/2 response to client fd=" + std::to_string(client_fd_) + ": " + msg.payload);
+                const auto response = handler_(msg.payload);
                 const auto resp_frame = protocol::gkwp2::EncodeResponse(
                     msg.request_id, msg.stream_id, response,
                     (msg.flags & protocol::gkwp2::flags::kEndStream) != 0);
@@ -112,7 +137,8 @@ void Connection::Serve()
             }
             else
             {
-                logger_->Info("Sending GKWP response to client fd=" + std::to_string(client_fd_) + ": " + response);
+                logger_->Info("Sending GKWP response to client fd=" + std::to_string(client_fd_) + ": " + msg.payload);
+                const auto response = handler_(msg.payload);
                 if (!SendAll(protocol::EncodeFrame(response)))
                 {
                     return;

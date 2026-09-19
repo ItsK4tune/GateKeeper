@@ -37,6 +37,8 @@ gatekeeper_library(gk_protocol
     src/protocol/gkwp2/frame.cpp
     src/protocol/gkwp2/decoder.cpp
     src/protocol/gkwp2/stream_manager.cpp
+    src/protocol/resp/decoder.cpp
+    src/protocol/resp/encoder.cpp
     src/protocol/http/http_channel.cpp
 )
 
@@ -167,6 +169,9 @@ if(BUILD_TESTING)
     add_executable(gkwp2_tests tests/protocol/gkwp2/gkwp2_tests.cpp)
     target_link_libraries(gkwp2_tests PRIVATE gk_protocol)
     add_test(NAME gkwp2_tests COMMAND gkwp2_tests)
+    add_executable(resp_tests tests/protocol/resp/resp_tests.cpp)
+    target_link_libraries(resp_tests PRIVATE gk_protocol)
+    add_test(NAME resp_tests COMMAND resp_tests)
 
     add_executable(cli_tests tests/cli/application_test.cpp)
     target_link_libraries(cli_tests PRIVATE gk_cli)
