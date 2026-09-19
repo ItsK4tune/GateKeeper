@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/protocol/gkwp/response.h"
+﻿#include "gatekeeper/protocol/response.h"
 
 namespace gatekeeper::protocol
 {

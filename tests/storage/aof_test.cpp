@@ -1,7 +1,7 @@
 #include "gatekeeper/storage/aof/aof_writer.h"
 #include "gatekeeper/storage/aof/aof_loader.h"
 #include "gatekeeper/command/dispatcher.h"
-#include "gatekeeper/protocol/gkwp/json_reader.h"
+#include "gatekeeper/protocol/json_reader.h"
 
 #include <cassert>
 #include <filesystem>

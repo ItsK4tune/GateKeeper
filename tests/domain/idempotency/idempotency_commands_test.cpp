@@ -1,5 +1,5 @@
 #include "gatekeeper/command/dispatcher.h"
-#include "gatekeeper/protocol/gkwp/json_reader.h"
+#include "gatekeeper/protocol/json_reader.h"
 #include "gatekeeper/storage/memory_store.h"
 
 #include <cassert>

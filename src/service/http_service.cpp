@@ -1,7 +1,7 @@
 #include "gatekeeper/storage/aof/aof_writer.h"
 #include "gatekeeper/service/http_service.h"
-#include "gatekeeper/protocol/gkwp/json_reader.h"
-#include "gatekeeper/protocol/gkwp/response.h"
+#include "gatekeeper/protocol/json_reader.h"
+#include "gatekeeper/protocol/response.h"
 
 #include <chrono>
 #include <stdexcept>

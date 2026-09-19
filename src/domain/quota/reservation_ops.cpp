@@ -1,6 +1,6 @@
 ﻿#include "gatekeeper/domain/quota/reservation_ops.h"
-#include "gatekeeper/protocol/gkwp/json_reader.h"
-#include "gatekeeper/protocol/gkwp/response.h"
+#include "gatekeeper/protocol/json_reader.h"
+#include "gatekeeper/protocol/response.h"
 
 #include <cstdint>
 #include <stdexcept>

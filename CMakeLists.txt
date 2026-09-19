@@ -29,11 +29,11 @@ gatekeeper_library(gk_command_names
 )
 
 gatekeeper_library(gk_protocol
-    src/protocol/gkwp/frame.cpp
-    src/protocol/gkwp/decoder.cpp
-    src/protocol/gkwp/parser.cpp
-    src/protocol/gkwp/response.cpp
-    src/protocol/gkwp/json_reader.cpp
+    src/protocol/gkwp1/frame.cpp
+    src/protocol/gkwp1/decoder.cpp
+    src/protocol/json_parser.cpp
+    src/protocol/response.cpp
+    src/protocol/json_reader.cpp
     src/protocol/gkwp2/frame.cpp
     src/protocol/gkwp2/decoder.cpp
     src/protocol/gkwp2/stream_manager.cpp
@@ -151,9 +151,9 @@ if(BUILD_TESTING)
     add_test(NAME options_tests COMMAND options_tests)
 
     add_executable(protocol_tests
-        tests/protocol/gkwp/frame_decoder_test.cpp
-        tests/protocol/gkwp/json_request_parser_test.cpp
-        tests/protocol/gkwp/response_test.cpp
+        tests/protocol/gkwp1/frame_decoder_test.cpp
+        tests/protocol/json_request_parser_test.cpp
+        tests/protocol/response_test.cpp
         tests/command/command_dispatcher_test.cpp
         tests/cli/command_test.cpp
     )

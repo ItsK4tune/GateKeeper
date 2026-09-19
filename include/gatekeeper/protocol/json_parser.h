@@ -1,7 +1,7 @@
 #pragma once
 
-#include "gatekeeper/protocol/gkwp/error.h"
-#include "gatekeeper/protocol/gkwp/request.h"
+#include "gatekeeper/protocol/error.h"
+#include "gatekeeper/protocol/request.h"
 
 #include <string_view>
 

@@ -2,7 +2,7 @@
 #include "gatekeeper/cli/format.h"
 #include "gatekeeper/cli/suggest.h"
 #include "gatekeeper/command/name.h"
-#include "gatekeeper/protocol/gkwp/response.h"
+#include "gatekeeper/protocol/response.h"
 
 #include <cctype>
 #include <iomanip>

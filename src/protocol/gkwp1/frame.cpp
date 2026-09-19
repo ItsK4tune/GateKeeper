@@ -1,4 +1,4 @@
-#include "gatekeeper/protocol/gkwp/frame.h"
+#include "gatekeeper/protocol/gkwp1/frame.h"
 
 #include <limits>
 

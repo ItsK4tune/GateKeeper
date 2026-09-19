@@ -1,6 +1,6 @@
 #include "gatekeeper/domain/kv/string_ops.h"
 #include "gatekeeper/domain/kv/string_body.h"
-#include "gatekeeper/protocol/gkwp/response.h"
+#include "gatekeeper/protocol/response.h"
 #include "gatekeeper/storage/store.h"
 
 #include <stdexcept>

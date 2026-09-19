@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/protocol/gkwp/json_reader.h"
+﻿#include "gatekeeper/protocol/json_reader.h"
 
 #include <cctype>
 #include <stdexcept>
