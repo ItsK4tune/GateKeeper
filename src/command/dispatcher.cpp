@@ -1,3 +1,4 @@
+#include "gatekeeper/storage/aof/aof_writer.h"
 #include "gatekeeper/domain/idempotency/idempotency_ops.h"
 #include "gatekeeper/command/dispatcher.h"
 #include "gatekeeper/domain/ratelimit/counter_ops.h"
@@ -13,6 +14,15 @@
 
 namespace gatekeeper::command
 {
+namespace {
+bool IsWriteOp(std::string_view op)
+{
+    return op == "SET" || op == "DEL" || op == "EXPIRE" || op == "PEXPIRE" || op == "PERSIST" ||
+           op == "GK.RATE_LIMIT" || op == "GK.RESERVE" || op == "GK.COMMIT" || op == "GK.ROLLBACK" ||
+           op == "GK.QUOTA_INIT" || op == "GK.IDEM_BEGIN" || op == "GK.IDEM_COMPLETE" || op == "GK.IDEM_FAIL";
+}
+}
+
 
 Dispatcher::Dispatcher()
     : Dispatcher(std::make_unique<storage::MemoryStore>())
@@ -56,7 +66,12 @@ Result Dispatcher::Dispatch(const protocol::Request& request) const
     {
         return {false, {}, {"UNKNOWN_COMMAND", "unsupported command: " + request.op}};
     }
-    return handler->second(request);
+    auto res = handler->second(request);
+    if (res.ok && aof_writer_ && IsWriteOp(request.op))
+    {
+        aof_writer_->Append(request.op, request.body_json);
+    }
+    return res;
 }
 
 std::size_t Dispatcher::PurgeExpired(std::size_t sample_limit)
@@ -73,5 +88,16 @@ const storage::Store& Dispatcher::GetStore() const noexcept
 {
     return *store_;
 }
+
+void Dispatcher::SetAofWriter(std::shared_ptr<storage::aof::AofWriter> writer)
+{
+    aof_writer_ = std::move(writer);
+}
+
+std::shared_ptr<storage::aof::AofWriter> Dispatcher::GetAofWriter() const noexcept
+{
+    return aof_writer_;
+}
+
 
 }

@@ -39,6 +39,8 @@ gatekeeper_library(gk_protocol
 
 gatekeeper_library(gk_storage
     src/storage/memory_store.cpp
+    src/storage/aof/aof_writer.cpp
+    src/storage/aof/aof_loader.cpp
 )
 
 gatekeeper_library(gk_domain
@@ -128,6 +130,10 @@ if(BUILD_TESTING)
     add_executable(parking_lot_tests tests/domain/idempotency/parking_lot_test.cpp)
     target_link_libraries(parking_lot_tests PRIVATE gk_domain)
     add_test(NAME parking_lot_tests COMMAND parking_lot_tests)
+
+    add_executable(aof_tests tests/storage/aof_test.cpp)
+    target_link_libraries(aof_tests PRIVATE gk_commands)
+    add_test(NAME aof_tests COMMAND aof_tests)
 
     add_executable(concurrent_clients_tests tests/net/concurrent_clients_test.cpp)
     target_link_libraries(concurrent_clients_tests PRIVATE gk_net gk_storage)

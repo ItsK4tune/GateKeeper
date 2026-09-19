@@ -16,6 +16,9 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
     bool has_log = false;
     bool has_log_dir = false;
     bool has_timer = false;
+    bool has_persistence = false;
+    bool has_data_dir = false;
+    bool has_fsync = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string_view argument = argv[index];
@@ -71,6 +74,28 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
                 throw std::invalid_argument("INVALID_OPTION: invalid timer interval: " + std::string(value));
             }
             config.timer_interval_ms = interval;
+        }
+        else if (argument == "--persistence")
+        {
+            const auto value = config::ReadOptionValue(argc, argv, index, "persistence", has_persistence);
+            if (value != "none" && value != "aof")
+            {
+                throw std::invalid_argument("INVALID_OPTION: invalid persistence: " + std::string(value) + ". Expected none or aof.");
+            }
+            config.persistence = std::string(value);
+        }
+        else if (argument == "--data-dir")
+        {
+            config.data_dir = std::string(config::ReadOptionValue(argc, argv, index, "data-dir", has_data_dir));
+        }
+        else if (argument == "--fsync")
+        {
+            const auto value = config::ReadOptionValue(argc, argv, index, "fsync", has_fsync);
+            if (value != "always" && value != "everysec" && value != "no")
+            {
+                throw std::invalid_argument("INVALID_OPTION: invalid fsync policy: " + std::string(value) + ". Expected always, everysec, or no.");
+            }
+            config.fsync = std::string(value);
         }
         else
         {
