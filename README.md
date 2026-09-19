@@ -1,6 +1,6 @@
 # GateKeeper
 
-GateKeeper is a high-performance in-memory key-value store and distributed rate-limiting engine written in C++20. It provides sub-millisecond request validation, atomic counters, a two-phase quota reservation system with automatic rollback on timeout, and dual-protocol connectivity (custom binary TCP and native HTTP/1.1 REST).
+GateKeeper is a high-performance in-memory key-value store, distributed rate-limiting, and idempotency engine written in C++20. It provides sub-millisecond request validation, atomic counters, two-phase quota reservation with automatic rollback on timeout, an idempotency engine with single-flight request coalescing, pluggable AOF persistence, and dual-protocol connectivity (custom binary TCP protocol GKWP/1 and native HTTP/1.1 REST).
 
 ---
 
@@ -10,14 +10,28 @@ GateKeeper is a high-performance in-memory key-value store and distributed rate-
   - [1. Overview & Architecture](#1-overview--architecture)
   - [2. GateKeeper Wire Protocol Specification (GKWP/1)](#2-gatekeeper-wire-protocol-specification-gkwp1)
   - [3. Features & Command Reference](#3-features--command-reference)
+    - [A. Core Key-Value Operations](#a-core-key-value-operations)
+    - [B. TTL and Expiration Commands](#b-ttl-and-expiration-commands)
+    - [C. Atomic Counter Operations](#c-atomic-counter-operations)
+    - [D. Sliding Window Counter - Hybrid Rate Limiting](#d-sliding-window-counter---hybrid-rate-limiting)
+    - [E. Two-Phase Quota Reservation](#e-two-phase-quota-reservation)
+    - [F. Idempotency Engine & Single-Flight Coalescing](#f-idempotency-engine--single-flight-coalescing)
+    - [G. Pluggable AOF Persistence & Crash Recovery](#g-pluggable-aof-persistence--crash-recovery)
   - [4. Installation & Build](#4-installation--build)
-  - [5. Writing Client SDKs and Middlewares](#5-writing-client-sdks-and-middlewares)
+  - [5. Client SDKs and Middlewares](#5-client-sdks-and-middlewares)
 - [Tài Liệu Tiếng Việt](#tài-liệu-tiếng-việt)
   - [1. Giới Thiệu & Kiến Trúc Hệ Thống](#1-giới-thiệu--kiến-trúc-hệ-thống)
   - [2. Đặc Tả Giao Thức GKWP/1](#2-đặc-tả-giao-thức-gkwp1)
   - [3. Tính Năng & Hướng Dẫn Sử Dụng](#3-tính-năng--hướng-dẫn-sử-dụng)
+    - [A. Thao Tác Key-Value Cốt Lõi](#a-thao-tác-key-value-cốt-lõi)
+    - [B. Nhóm Lệnh TTL và Hết Hạn](#b-nhóm-lệnh-ttl-và-hết-hạn)
+    - [C. Bộ Đếm Nguyên Tử (Atomic Counters)](#c-bộ-đếm-nguyên-tử-atomic-counters)
+    - [D. Kiểm Soát Tốc Độ Cửa Sổ Trượt - Hybrid](#d-kiểm-soát-tốc-độ-cửa-sổ-trượt---hybrid)
+    - [E. Cơ Chế Giữ Chỗ Hạn Ngạch 2 Pha (Two-Phase Quota Reservation)](#e-cơ-chế-giữ-chỗ-hạn-ngạch-2-pha-two-phase-quota-reservation)
+    - [F. Động Cơ Xử Lý Idempotency & Gom Nhóm Request (Single-Flight)](#f-động-cơ-xử-lý-idempotency--gom-nhóm-request-single-flight)
+    - [G. Lưu Trữ Bền Vững AOF & Phục Hồi Sau Sự Cố](#g-lưu-trữ-bền-vững-aof--phục-hồi-sau-sự-cố)
   - [4. Cài Đặt & Biên Dịch](#4-cài-đặt--biên-dịch)
-  - [5. Hướng Dẫn Xây Dựng SDK và Middleware](#5-hướng-dẫn-xây-dựng-sdk-và-middleware)
+  - [5. Hướng Dẫn Sử Dụng SDK và Middleware](#5-hướng-dẫn-sử-dụng-sdk-và-middleware)
 
 ---
 
@@ -25,16 +39,19 @@ GateKeeper is a high-performance in-memory key-value store and distributed rate-
 
 ### 1. Overview & Architecture
 
-GateKeeper is designed for infrastructure architectures that require centralized, highly consistent rate limiting and resource quota accounting across distributed microservices.
+GateKeeper is designed for infrastructure architectures requiring centralized, highly consistent rate limiting, resource quota accounting, and idempotent execution across distributed microservices.
 
 Core architectural components:
 
 - **Single-Threaded Non-Blocking Event Loop**: Built on Linux epoll multiplexing with edge/level-triggered socket handling and partial read/write buffering. The entire dataset and counter operations reside in memory, executed sequentially without thread context-switching or mutex contention in the execution path.
-- **Zero External Dependencies**: The server is implemented entirely using the modern C++20 standard library (conforming to strict memory safety and RAII), containing a custom RFC 8259 JSON parser (`protocol::JsonReader`) and an internal hash table engine.
+- **Zero External Dependencies**: Implemented entirely with the modern C++20 standard library (strict memory safety and RAII), containing a custom RFC 8259 streaming JSON parser (`protocol::JsonReader`) and an internal hash table engine.
 - **Dual-Protocol Listener**: The event loop simultaneously services incoming connections on two independent ports:
   1. The custom binary length-prefixed GateKeeper Wire Protocol (GKWP/1) on port 63779.
   2. Native HTTP/1.1 REST API on port 8080.
 - **Hybrid Expiration Model**: Combines lazy eviction (evaluated upon access) with active periodic expiration (random key sampling triggered by an integrated timer on the event loop).
+- **Hybrid Sliding Window Counter**: Rate limiting that eliminates boundary burst while maintaining $O(1)$ memory and $O(1)$ CPU overhead.
+- **Idempotency Engine & Single-Flight Coalescing**: Guarantees exactly-once execution for state-mutating requests, automatically deduplicating concurrent duplicate requests via connection parking.
+- **Pluggable AOF Persistence**: Write-ahead append-only log (AOF) with configurable fsync policies (`always`, `everysec`, `no`) and automatic crash recovery on startup.
 
 ---
 
@@ -80,8 +97,8 @@ Success Response:
 ```json
 {
   "id": "req-1001",
-  "status": "ok",
-  "data": {
+  "ok": true,
+  "result": {
     "allowed": true,
     "remaining": 99,
     "retry_after_ms": 0
@@ -93,7 +110,7 @@ Error Response:
 ```json
 {
   "id": "req-1001",
-  "status": "error",
+  "ok": false,
   "error": {
     "code": "INVALID_ARGUMENTS",
     "message": "limit must be greater than zero"
@@ -109,6 +126,8 @@ Connection semantics support request pipelining over persistent connections. Pip
 
 #### A. Core Key-Value Operations
 
+##### GKWP Commands
+
 | Command | Syntax | Description |
 | :--- | :--- | :--- |
 | `PING` | `PING [message]` | Tests connection liveness. Returns `PONG` or echoed message. |
@@ -118,18 +137,41 @@ Connection semantics support request pipelining over persistent connections. Pip
 | `EXISTS` | `EXISTS <key>` | Checks if key exists and is unexpired. |
 | `TYPE` | `TYPE <key>` | Returns the data type (`string`, `none`). |
 | `DBSIZE` | `DBSIZE` | Returns total number of active entries in the database. |
-| `KEYS` | `KEYS <pattern>` | Returns keys matching glob pattern (supports `*`, `?`). |
-| `SCAN` | `SCAN <cursor> [COUNT count]` | Iterates database keys progressively. |
+| `KEYS` | `KEYS [pattern]` | Scans keys matching pattern. |
+| `SCAN` | `SCAN <cursor> [COUNT count]` | Iterates keys incrementally using cursor. |
 
-#### B. TTL and Eviction Commands
+##### HTTP REST Endpoints
+
+| Method | Path | Body / Query | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/v1/kv/set` | `{"key":"k","value":"v","ttl_ms":60000}` | Sets key with optional TTL (`ttl_ms` or `ttl_seconds`). |
+| `GET` | `/v1/kv/get` | `?key=k` | Retrieves value of key (returns 404 if not found). |
+| `POST` | `/v1/kv/del` | `{"key":"k"}` | Deletes key. Returns `{"deleted": true/false}`. |
+| `POST` | `/v1/kv/exists` | `{"key":"k"}` | Checks existence. Returns `{"exists": true/false}`. |
+| `GET` | `/v1/kv/type` | `?key=k` | Returns type `{"type": "string"|"none"}`. |
+
+---
+
+#### B. TTL and Expiration Commands
+
+##### GKWP Commands
 
 | Command | Syntax | Description |
 | :--- | :--- | :--- |
-| `EXPIRE` | `EXPIRE <key> <seconds>` | Sets a timeout on key in seconds. |
-| `PEXPIRE`| `PEXPIRE <key> <ms>` | Sets a timeout on key in milliseconds. |
+| `EXPIRE` | `EXPIRE <key> <seconds>` | Sets expiration on key in seconds. |
+| `PEXPIRE`| `PEXPIRE <key> <ms>` | Sets expiration on key in milliseconds. |
 | `TTL` | `TTL <key>` | Returns remaining TTL in seconds (-1 if no TTL, -2 if not found). |
 | `PTTL` | `PTTL <key>` | Returns remaining TTL in milliseconds (-1 if no TTL, -2 if not found). |
 | `PERSIST`| `PERSIST <key>` | Removes existing timeout from a key. |
+
+##### HTTP REST Endpoints
+
+| Method | Path | Body / Query | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/v1/kv/expire` | `{"key":"k","ttl_seconds":60}` | Sets TTL in seconds or milliseconds (`ttl_ms`). |
+| `GET` | `/v1/kv/ttl` | `?key=k` | Returns remaining TTL `{"ttl": 60}` (-1 or -2 if none/expired). |
+
+---
 
 #### C. Atomic Counter Operations
 
@@ -137,30 +179,50 @@ Connection semantics support request pipelining over persistent connections. Pip
 - `DECR <key>`: Decrements integer value by 1.
 - `INCRBY <key> <delta>`: Atomically increments or decrements integer value by signed 64-bit integer.
 
-#### D. Distributed Sliding-Window Rate Limiting
+---
 
-- **GKWP Command**: `GK.RATE_LIMIT <key> <limit> <window_ms> [cost]`
-  Evaluates consumption against a sliding window. If current usage plus cost is within limit, increments counter and returns `allowed=1` with remaining quota. Otherwise, returns `allowed=0` with `retry_after_ms`.
-- **HTTP REST Endpoint**: `POST /v1/rate-limit/check`
-  ```bash
-  curl -i -X POST http://127.0.0.1:8080/v1/rate-limit/check     -H "Content-Type: application/json"     -d '{
-      "tenant": "default",
-      "subject": "192.168.1.100",
-      "resource": "api:orders",
-      "limit": 60,
-      "window_ms": 60000,
-      "cost": 1
-    }'
-  ```
-  Returns standard RFC headers:
-  - `X-RateLimit-Limit`: Maximum requests per window.
-  - `X-RateLimit-Remaining`: Available requests remaining.
-  - `X-RateLimit-Reset`: Unix timestamp in seconds when the window resets.
-  - `Retry-After`: Seconds to wait before retrying (sent when status is 429).
+#### D. Sliding Window Counter - Hybrid Rate Limiting
 
-#### E. Two-Phase Quota Reservation (GenAI & Distributed Billing)
+GateKeeper implements the **Sliding Window Counter - Hybrid** algorithm. It computes a weighted sum of requests between the previous window and the current window:
 
-Designed for multi-step workflows where token or credit consumption cannot be predicted upfront:
+$$\text{weight} = \frac{\text{window\_ms} - (\text{now\_ms} \bmod \text{window\_ms})}{\text{window\_ms}}$$
+$$\text{estimated\_count} = \text{previous\_count} \times \text{weight} + \text{current\_count}$$
+
+- **Zero Boundary Burst**: Smooths out traffic spikes at window transitions.
+- **$O(1)$ Memory & CPU**: Requires only two counters per key, avoiding the linear RAM overhead of Sliding Window Log.
+
+##### GKWP Command
+
+`GK.RATE_LIMIT <key> <limit> <window_ms> [cost]`
+
+##### HTTP REST Endpoint
+
+`POST /v1/rate-limit/check`
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/v1/rate-limit/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant": "default",
+    "subject": "192.168.1.100",
+    "resource": "api:orders",
+    "limit": 60,
+    "window_ms": 60000,
+    "cost": 1
+  }'
+```
+
+Returns standard RFC headers:
+- `X-RateLimit-Limit`: Maximum requests per window.
+- `X-RateLimit-Remaining`: Available requests remaining.
+- `X-RateLimit-Reset`: Unix timestamp in seconds when the window resets.
+- `Retry-After`: Seconds to wait before retrying (sent on status 429).
+
+---
+
+#### E. Two-Phase Quota Reservation
+
+Designed for multi-step workflows where token or credit consumption cannot be predicted upfront (e.g. LLM generation, billing):
 
 1. **Initialize Quota Pool**:
    `GK.QUOTA_INIT <key> <quota> [ttl_ms]` or `POST /v1/quota/init`
@@ -173,7 +235,38 @@ Designed for multi-step workflows where token or credit consumption cannot be pr
    - `GK.ROLLBACK <key> <reservation_id>` or `POST /v1/quota/rollback`
      Cancels the reservation and restores 100% of the reserved amount back to the pool.
 4. **Auto-Rollback on Timeout**:
-   If an external worker crashes or fails to commit before `ttl_ms` elapses, the background expiration engine automatically cancels the reservation and restores the reserved quota to the pool.
+   If a worker crashes or fails to commit before `ttl_ms` elapses, the background expiration engine automatically cancels the reservation and restores the reserved quota to the pool.
+
+---
+
+#### F. Idempotency Engine & Single-Flight Coalescing
+
+Guarantees exactly-once execution for non-idempotent operations (such as payment processing and order creation):
+
+1. **Atomic Claim (`GK.IDEM_BEGIN` / `POST /v1/idempotency/begin`)**:
+   - `EXECUTE`: The client is the primary owner and should process the work.
+   - `PARK`: A duplicate request is already in progress. The connection is parked in the `ParkingLot` awaiting the result.
+   - `REPLAY`: The request previously completed. GateKeeper returns the cached response immediately.
+   - `CONFLICT`: Same idempotency key used with a different request payload hash.
+2. **Complete (`GK.IDEM_COMPLETE` / `POST /v1/idempotency/complete`)**:
+   Saves the response code and body, wakes up all parked waiters, and caches the result.
+3. **Fail (`GK.IDEM_FAIL` / `POST /v1/idempotency/fail`)**:
+   Marks the execution as failed and wakes up parked waiters.
+4. **Lookup (`GK.IDEM_GET <key>`)**:
+   Retrieves idempotency status and cached response.
+
+---
+
+#### G. Pluggable AOF Persistence & Crash Recovery
+
+GateKeeper supports an Append-Only File (AOF) persistence engine for durability:
+
+- **Commands Logged**: State-mutating commands (`SET`, `DEL`, `PEXPIRE`, `GK.QUOTA_INIT`, `GK.RESERVE`, `GK.COMMIT`, `GK.ROLLBACK`, `GK.IDEM_BEGIN`, `GK.IDEM_COMPLETE`, `GK.IDEM_FAIL`).
+- **Configurable Fsync**:
+  - `always`: Fsync on every write (highest durability, lower throughput).
+  - `everysec`: Background fsync every second (balanced performance and durability).
+  - `no`: Relies on OS filesystem cache flushing.
+- **Crash Recovery**: Automatically reconstructs in-memory state on startup, safely ignoring truncated commands caused by power failures.
 
 ---
 
@@ -185,7 +278,7 @@ Designed for multi-step workflows where token or credit consumption cannot be pr
 - C++20 compliant compiler: GCC 11+ or Clang 13+
 - CMake 3.20 or newer
 - Python 3.8+ (required for executing integration test suites)
-- Optional: Go 1.22+ and Node.js 18+ for compiling SDK tests
+- Optional: Go 1.22+ and Node.js 18+ for SDK tests
 
 #### Building from Source
 
@@ -197,15 +290,15 @@ cd GateKeeper
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# Execute automated test suite (20/20 test targets)
+# Execute automated test suite (26/26 test targets)
 ctest --test-dir build --output-on-failure
 ```
 
 #### Running the Server Daemon
 
 ```bash
-# Listen on binary port 63779 and HTTP port 8080 with 50ms active purge timer
-./build/gatekeeper --port 63779 --http-port 8080 --timer 50 --log terminal
+# Listen on GKWP port 63779, HTTP port 8080, with AOF persistence enabled
+./build/gatekeeper --port 63779 --http-port 8080 --persistence aof --data-dir ./data --fsync everysec --timer 50 --log terminal
 ```
 
 Server startup flags:
@@ -214,8 +307,11 @@ Server startup flags:
 - `-t, --timer <ms>`: Periodic expiration sweep interval in milliseconds (`-1` to disable).
 - `-l, --log <mode>`: Log mode (`none`, `terminal`, `file`).
 - `-d, --log-dir <dir>`: Directory where log file is stored.
+- `--persistence <mode>`: Persistence mode (`none` or `aof`, default: `none`).
+- `--data-dir <dir>`: Directory for persistence files (default: `./data`).
+- `--fsync <policy>`: Fsync policy for AOF (`always`, `everysec`, `no`, default: `everysec`).
 
-#### Using the Interactive CLI Client
+#### Using the Interactive CLI Client (`gate`)
 
 ```bash
 # Connect to local GateKeeper server
@@ -232,47 +328,103 @@ allowed=1 remaining=4 retry_after_ms=0
 
 ---
 
-### 5. Writing Client SDKs and Middlewares
+### 5. Client SDKs and Middlewares
 
-Developers can integrate GateKeeper into any backend technology stack using either the binary GKWP protocol or the HTTP REST surface.
+Official client libraries are provided for Go and Node.js/NestJS. Both SDKs use the high-performance **GKWP TCP protocol by default**, while maintaining full support for HTTP fallback.
 
-#### Approach 1: HTTP-Based Middleware (Recommended for Web Frameworks)
+#### Go SDK (`sdk/go/`)
 
-Writing a middleware for frameworks such as Go (Gin/Fiber), Node.js (Express/Fastify), Python (FastAPI/Django), or Java (Spring Boot) follows a standard 4-step pipeline:
+```go
+package main
 
+import (
+    "context"
+    "fmt"
+    "github.com/gatekeeper-kv/gatekeeper/sdk/go"
+)
+
+func main() {
+    // Default GKWP TCP client (127.0.0.1:63779)
+    client := gatekeeper.NewClient("127.0.0.1:63779")
+    defer client.Close()
+
+    // Or HTTP client fallback:
+    // client := gatekeeper.NewClient("http://127.0.0.1:8080", gatekeeper.WithHTTP())
+
+    ctx := context.Background()
+    resp, err := client.CheckRateLimit(ctx, gatekeeper.RateLimitRequest{
+        Key:      "user:1001",
+        Limit:    10,
+        WindowMs: 60000,
+    })
+    if err == nil && resp.Allowed {
+        fmt.Println("Allowed! Remaining:", resp.Remaining)
+    }
+}
 ```
-[ Incoming HTTP Request ]
-           |
-           v
-[ Step 1: Extract Subject Key (Client IP, API Key, User ID) ]
-           |
-           v
-[ Step 2: POST to GateKeeper /v1/rate-limit/check ]
-           |
-     +-----+------------------------+
-     |                              |
-[ Status: 200 OK ]         [ Status: 429 Too Many Requests ]
-     |                              |
-     v                              v
-Set X-RateLimit Headers     Set X-RateLimit Headers & Retry-After
-Pass to next handler        Short-circuit: return 429 JSON response
+
+- **HTTP & Gin Middlewares**: Built-in `RateLimitMiddleware` and `IdempotencyMiddleware` supporting automatic replay caching and header parsing.
+
+#### Node.js & NestJS SDK (`sdk/nodejs/`)
+
+##### Pure Node.js / Express
+
+```javascript
+const { GateKeeperClient, createRateLimitMiddleware, createIdempotencyMiddleware } = require('@gatekeeper-kv/client');
+
+// Default GKWP TCP client
+const client = new GateKeeperClient({ host: '127.0.0.1', port: 63779 });
+
+// Or HTTP fallback:
+// const client = new GateKeeperClient({ endpoint: 'http://127.0.0.1:8080' });
+
+const app = express();
+app.use(createRateLimitMiddleware(client, { limit: 100, windowMs: 60000 }));
+app.use(createIdempotencyMiddleware(client));
 ```
 
-Key considerations for robust middleware implementation:
-- **Connection Reuse**: Keep HTTP connections alive using connection pooling (`keep-alive`) to avoid TCP socket setup penalties.
-- **Fail-Open vs Fail-Closed**: Decide behavior if GateKeeper is unreachable. For customer-facing APIs, fail-open (`next()`) avoids service outages. For sensitive endpoints (e.g. login brute-force defense), fail-closed (`503 Service Unavailable`) is preferred.
-- **Header Propagation**: Always forward `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` downstream so frontend clients can throttle requests adaptively.
+##### NestJS Dynamic Module
 
-#### Approach 2: GKWP Binary Client (Lowest Latency RPC)
+```typescript
+import { Module } from '@nestjs/common';
+import { GateKeeperModule, GateKeeperService } from '@gatekeeper-kv/client';
 
-For high-throughput internal RPC communications:
-1. Open persistent TCP socket to port `63779`.
-2. Construct request JSON: `{"id": id, "op": op, "body": args}`.
-3. Prepend 4 bytes containing big-endian length.
-4. Send full buffer to socket.
-5. Read 4 bytes to determine incoming response payload length, then read payload bytes.
+@Module({
+  imports: [
+    GateKeeperModule.forRoot({
+      host: '127.0.0.1',
+      port: 63779, // GKWP TCP default
+    }),
+    // Or async configuration:
+    // GateKeeperModule.forRootAsync({
+    //   useFactory: (config: ConfigService) => ({
+    //     host: config.get('GATEKEEPER_HOST'),
+    //     port: config.get('GATEKEEPER_PORT'),
+    //   }),
+    //   inject: [ConfigService],
+    // }),
+  ],
+})
+export class AppModule {}
+```
 
-Official implementations are available under `sdk/go/` and `sdk/nodejs/`.
+Inject and use `GateKeeperService`:
+
+```typescript
+@Injectable()
+export class OrderService {
+  constructor(private readonly gkService: GateKeeperService) {}
+
+  async createOrder(userId: string) {
+    const rl = await this.gkService.checkRateLimit({
+      key: `order:${userId}`,
+      limit: 5,
+      windowMs: 60000,
+    });
+    // Process order...
+  }
+}
+```
 
 ---
 
@@ -280,7 +432,7 @@ Official implementations are available under `sdk/go/` and `sdk/nodejs/`.
 
 ### 1. Giới Thiệu & Kiến Trúc Hệ Thống
 
-GateKeeper là hệ thống lưu trữ dữ liệu in-memory và engine kiểm soát tốc độ (rate limiting) phân tán, hiệu năng cao được phát triển bằng ngôn ngữ C++20 hiện đại. Hệ thống được thiết kế chuyên biệt cho kiến trúc vi dịch vụ (microservices), API Gateway, và các pipeline xử lý Generative AI đòi hỏi độ trễ microsecond và tính nhất quán tuyệt đối.
+GateKeeper là hệ thống lưu trữ dữ liệu in-memory, engine kiểm soát tốc độ (rate limiting) phân tán, và xử lý idempotency hiệu năng cao được phát triển bằng ngôn ngữ C++20 hiện đại. Hệ thống được thiết kế chuyên biệt cho kiến trúc vi dịch vụ (microservices), API Gateway, và các pipeline xử lý Generative AI đòi hỏi độ trễ microsecond và tính nhất quán tuyệt đối.
 
 Các đặc điểm kiến trúc cốt lõi:
 - **Event Loop đơn luồng non-blocking dựa trên epoll**: Sử dụng cơ chế epoll multiplexing của Linux trên một luồng duy nhất để xử lý I/O bất đồng bộ. Toàn bộ dữ liệu lưu trữ trên RAM được cập nhật tuần tự, loại bỏ hoàn toàn hiện tượng tranh chấp khóa (mutex lock contention) và chi phí chuyển đổi ngữ cảnh (context switching) trên luồng thực thi dữ liệu.
@@ -289,6 +441,9 @@ Các đặc điểm kiến trúc cốt lõi:
   1. Giao thức nhị phân GKWP/1 trên cổng 63779.
   2. Giao thức RESTful HTTP/1.1 trên cổng 8080.
 - **Mô hình hết hạn kết hợp (Hybrid Expiration)**: Kết hợp giữa dọn dẹp thụ động (lazy eviction khi có truy cập) và quét ngẫu nhiên chủ động (active eviction định kỳ qua timer tích hợp trong Event Loop).
+- **Thuật toán Sliding Window Counter - Hybrid**: Triệt tiêu hiện tượng dồn tải tại ranh giới cửa sổ (Boundary Burst) với độ phức tạp bộ nhớ $O(1)$ và CPU $O(1)$.
+- **Động cơ Idempotency & Gom Nhóm Request (Single-Flight)**: Đảm bảo xử lý đúng một lần (exactly-once), tự động gom các request trùng lặp đồng thời vào hàng đợi chờ kết quả (`ParkingLot`).
+- **Lưu trữ bền vững AOF có thể cấu hình**: Ghi nhật ký thao tác tuần tự (Append-Only File) với các chế độ fsync linh hoạt và tự động phục hồi sau sự cố.
 
 ---
 
@@ -299,81 +454,49 @@ Giao thức GateKeeper Wire Protocol (phiên bản 1) hoạt động trên nền
 #### Cấu Trúc Gói Tin
 
 ```
-+------------------------------------+----------------------------------+
-| Độ dài Payload (4 Byte Big-Endian) | Dữ liệu JSON (N Byte UTF-8)      |
-+------------------------------------+----------------------------------+
++-----------------------------+------------------------------------+
+| Length (4 Bytes, Big-Endian)| Payload (N Bytes, UTF-8 JSON)      |
++-----------------------------+------------------------------------+
 ```
 
-- **Trường độ dài (4 Byte đầu)**: Số nguyên không dấu 32-bit (Big-Endian uint32) thể hiện chính xác kích thước byte của phần payload. Kích thước tối đa cho phép hiện tại là 16 MiB (16.777.216 byte).
-- **Phần Payload**: Chuỗi JSON hợp lệ thể hiện request hoặc response.
-
-#### Định Dạng Request
-
-```json
-{
-  "id": "req-1001",
-  "op": "GK.RATE_LIMIT",
-  "body": {
-    "key": "ratelimit:tenant_a:user_12",
-    "limit": 100,
-    "window_ms": 60000,
-    "cost": 1
-  }
-}
-```
-
-- `id` (chuỗi, bắt buộc): Mã định danh yêu cầu do client tự sinh để khớp nối kết quả.
-- `op` (chuỗi, bắt buộc): Tên lệnh thực thi (không phân biệt chữ hoa, chữ thường).
-- `body` (object, tùy chọn): Các tham số của lệnh dưới dạng các trường JSON.
-
-#### Định Dạng Response
-
-Phản hồi thành công:
-```json
-{
-  "id": "req-1001",
-  "status": "ok",
-  "data": {
-    "allowed": true,
-    "remaining": 99,
-    "retry_after_ms": 0
-  }
-}
-```
-
-Phản hồi lỗi:
-```json
-{
-  "id": "req-1001",
-  "status": "error",
-  "error": {
-    "code": "INVALID_ARGUMENTS",
-    "message": "limit must be greater than zero"
-  }
-}
-```
-
-Giao thức hỗ trợ kỹ thuật đóng gói nhiều yêu cầu liên tiếp (request pipelining) trên cùng một kết nối TCP duy trì lâu dài.
+- **Trường Length**: Số nguyên không dấu 32-bit (Big-Endian) xác định chính xác số byte payload tiếp theo (tối đa 16 MiB).
+- **Trường Payload**: Đối tượng JSON định dạng UTF-8 chứa nội dung request hoặc response.
 
 ---
 
 ### 3. Tính Năng & Hướng Dẫn Sử Dụng
 
-#### A. Nhóm Lệnh Key-Value Cơ Bản
+#### A. Thao Tác Key-Value Cốt Lõi
+
+##### Lệnh GKWP
 
 | Lệnh | Cú pháp | Mô tả |
 | :--- | :--- | :--- |
-| `PING` | `PING [tin_nhan]` | Kiểm tra kết nối. Trả về `PONG` hoặc nội dung tin nhắn. |
-| `SET` | `SET <key> <value> [EX giay \| PX ms] [NX \| XX]` | Lưu giá trị chuỗi, hỗ trợ đặt TTL và điều kiện ghi. |
-| `GET` | `GET <key>` | Lấy giá trị của key. Trả về null nếu không tồn tại hoặc đã hết hạn. |
-| `DEL` | `DEL <key> [key ...]` | Xóa một hoặc nhiều key khỏi bộ nhớ. |
+| `PING` | `PING [message]` | Kiểm tra kết nối liveness. Trả về `PONG` hoặc nội dung message. |
+| `SET` | `SET <key> <val> [EX s \| PX ms] [NX \| XX]` | Lưu trữ giá trị chuỗi kèm thời gian sống và điều kiện. |
+| `GET` | `GET <key>` | Lấy giá trị của key (trả về null nếu không tồn tại hoặc đã hết hạn). |
+| `DEL` | `DEL <key> [key ...]` | Xóa một hoặc nhiều key khỏi hệ thống. |
 | `EXISTS` | `EXISTS <key>` | Kiểm tra key có tồn tại và còn hạn hay không. |
 | `TYPE` | `TYPE <key>` | Trả về kiểu dữ liệu (`string`, `none`). |
-| `DBSIZE` | `DBSIZE` | Trả về tổng số lượng key đang hoạt động trong database. |
-| `KEYS` | `KEYS <pattern>` | Tìm kiếm danh sách key theo mẫu glob (`*`, `?`). |
+| `DBSIZE` | `DBSIZE` | Lấy tổng số lượng key đang hoạt động trong cơ sở dữ liệu. |
+| `KEYS` | `KEYS [pattern]` | Tìm kiếm key theo mẫu pattern. |
 | `SCAN` | `SCAN <cursor> [COUNT so_luong]` | Duyệt danh sách key tuần tự bằng con trỏ cursor. |
 
+##### REST HTTP Endpoints
+
+| Method | Path | Body / Query | Mô tả |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/v1/kv/set` | `{"key":"k","value":"v","ttl_ms":60000}` | Lưu key với TTL tùy chọn (`ttl_ms` hoặc `ttl_seconds`). |
+| `GET` | `/v1/kv/get` | `?key=k` | Lấy giá trị của key (trả về 404 nếu không tìm thấy). |
+| `POST` | `/v1/kv/del` | `{"key":"k"}` | Xóa key. Trả về `{"deleted": true/false}`. |
+| `POST` | `/v1/kv/exists` | `{"key":"k"}` | Kiểm tra tồn tại. Trả về `{"exists": true/false}`. |
+| `GET` | `/v1/kv/type` | `?key=k` | Lấy kiểu dữ liệu `{"type": "string"|"none"}`. |
+
+---
+
 #### B. Nhóm Lệnh TTL và Hết Hạn
+
+##### Lệnh GKWP
 
 | Lệnh | Cú pháp | Mô tả |
 | :--- | :--- | :--- |
@@ -383,32 +506,61 @@ Giao thức hỗ trợ kỹ thuật đóng gói nhiều yêu cầu liên tiếp 
 | `PTTL` | `PTTL <key>` | Lấy thời gian sống còn lại theo mili-giây. |
 | `PERSIST`| `PERSIST <key>` | Xóa bỏ TTL, chuyển key sang trạng thái vĩnh viễn. |
 
+##### REST HTTP Endpoints
+
+| Method | Path | Body / Query | Mô tả |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/v1/kv/expire` | `{"key":"k","ttl_seconds":60}` | Thiết lập TTL theo giây hoặc mili-giây (`ttl_ms`). |
+| `GET` | `/v1/kv/ttl` | `?key=k` | Lấy TTL còn lại `{"ttl": 60}` (-1 hoặc -2). |
+
+---
+
 #### C. Bộ Đếm Nguyên Tử (Atomic Counters)
 
 - `INCR <key>`: Tăng giá trị nguyên của key lên 1 đơn vị.
 - `DECR <key>`: Giảm giá trị nguyên của key đi 1 đơn vị.
 - `INCRBY <key> <delta>`: Tăng hoặc giảm giá trị nguyên theo số nguyên có dấu 64-bit một cách nguyên tử.
 
-#### D. Kiểm Soát Tốc Độ Cửa Sổ Trượt (Sliding-Window Rate Limiting)
+---
 
-- **Lệnh GKWP**: `GK.RATE_LIMIT <key> <limit> <window_ms> [cost]`
-  Kiểm tra và trừ hạn mức trong cửa sổ trượt. Nếu hạn mức còn đủ, cộng dồn số lượng và trả về `allowed=1` kèm `remaining`. Nếu vượt ngưỡng, trả về `allowed=0` kèm thời gian cần chờ `retry_after_ms`.
-- **REST HTTP Endpoint**: `POST /v1/rate-limit/check`
-  ```bash
-  curl -i -X POST http://127.0.0.1:8080/v1/rate-limit/check     -H "Content-Type: application/json"     -d '{
-      "tenant": "default",
-      "subject": "192.168.1.100",
-      "resource": "api:orders",
-      "limit": 60,
-      "window_ms": 60000,
-      "cost": 1
-    }'
-  ```
-  Tự động trả về các HTTP Header tiêu chuẩn RFC:
-  - `X-RateLimit-Limit`: Hạn mức tối đa trong một cửa sổ.
-  - `X-RateLimit-Remaining`: Số lượt request còn lại khả dụng.
-  - `X-RateLimit-Reset`: Thời điểm cửa sổ reset tính theo Unix timestamp (giây).
-  - `Retry-After`: Số giây client cần tạm dừng trước khi gửi yêu cầu tiếp theo (trả về khi gặp mã 429).
+#### D. Kiểm Soát Tốc Độ Cửa Sổ Trượt - Hybrid
+
+GateKeeper triển khai thuật toán **Sliding Window Counter - Hybrid**, kết hợp trọng số giữa cửa sổ trước và cửa sổ hiện tại:
+
+$$\text{weight} = \frac{\text{window\_ms} - (\text{now\_ms} \bmod \text{window\_ms})}{\text{window\_ms}}$$
+$$\text{estimated\_count} = \text{previous\_count} \times \text{weight} + \text{current\_count}$$
+
+- **Triệt tiêu Boundary Burst**: Làm mượt lưu lượng tại thời điểm giao thoa giữa hai cửa sổ.
+- **Tiết kiệm tài nguyên $O(1)$**: Chỉ cần lưu 2 giá trị bộ đếm cho mỗi key, không gây tốn RAM như Sliding Window Log.
+
+##### Lệnh GKWP
+
+`GK.RATE_LIMIT <key> <limit> <window_ms> [cost]`
+
+##### REST HTTP Endpoint
+
+`POST /v1/rate-limit/check`
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/v1/rate-limit/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant": "default",
+    "subject": "192.168.1.100",
+    "resource": "api:orders",
+    "limit": 60,
+    "window_ms": 60000,
+    "cost": 1
+  }'
+```
+
+Tự động trả về các HTTP Header tiêu chuẩn RFC:
+- `X-RateLimit-Limit`: Hạn mức tối đa trong một cửa sổ.
+- `X-RateLimit-Remaining`: Số lượt request còn lại khả dụng.
+- `X-RateLimit-Reset`: Thời điểm cửa sổ reset tính theo Unix timestamp (giây).
+- `Retry-After`: Số giây client cần tạm dừng trước khi gửi yêu cầu tiếp theo (trả về khi gặp mã 429).
+
+---
 
 #### E. Cơ Chế Giữ Chỗ Hạn Ngạch 2 Pha (Two-Phase Quota Reservation)
 
@@ -421,11 +573,42 @@ Chuyên dụng cho các quy trình không thể dự đoán chính xác lượng
    Trừ trước hạn mức trần dự kiến và cấp phát một `reservation_id` duy nhất.
 3. **Pha 2 (Commit hoặc Rollback)**:
    - `GK.COMMIT <key> <reservation_id> [actual_amount]` hoặc `POST /v1/quota/commit`
-     Chốt số lượng tiêu thụ thực tế. Nếu `actual_amount < reserved_amount`, lượng hạn mức dư thừa sẽ được hoàn trả (refund) ngay lập tức về kho.
+     Chốt số lượng tiêu thụ thực tế. Nếu `actual_amount < reserved_amount`, lượng hạn mức dư thừa sẽ được hoàn trả ngay lập tức về kho.
    - `GK.ROLLBACK <key> <reservation_id>` hoặc `POST /v1/quota/rollback`
      Hủy bỏ yêu cầu giữ chỗ và hoàn trả 100% quota đã khóa về kho.
 4. **Tự Động Hoàn Trả Khi Timeout (Auto-Rollback on Timeout)**:
-   Nếu worker bị ngắt kết nối đột ngột hoặc gặp sự cố và không gửi lệnh commit trước khi `ttl_ms` kết thúc, tiến trình quét dọn chủ động sẽ tự động hủy reservation và hoàn trả toàn bộ số lượng quota đã giữ lại về kho.
+   Nếu worker bị ngắt kết nối đột ngột hoặc gặp sự cố và không gửi lệnh commit trước khi `ttl_ms` kết thúc, tiến trình quét dọn chủ động sẽ tự động hủy reservation và hoàn trả toàn bộ quota đã giữ lại về kho.
+
+---
+
+#### F. Động Cơ Xử Lý Idempotency & Gom Nhóm Request (Single-Flight)
+
+Đảm bảo tính thực thi đúng một lần (exactly-once) cho các nghiệp vụ thanh toán, tạo đơn hàng:
+
+1. **Atomic Claim (`GK.IDEM_BEGIN` / `POST /v1/idempotency/begin`)**:
+   - `EXECUTE`: Client là luồng xử lý đầu tiên, tiến hành gọi xử lý nghiệp vụ.
+   - `PARK`: Request trùng lặp đang được xử lý đồng thời bởi worker khác. Kết nối được giữ lại trong `ParkingLot` chờ kết quả.
+   - `REPLAY`: Request đã được xử lý xong trước đó. GateKeeper trả về ngay kết quả đã lưu trong cache.
+   - `CONFLICT`: Trùng idempotency key nhưng mã băm dữ liệu request (hash) khác nhau.
+2. **Complete (`GK.IDEM_COMPLETE` / `POST /v1/idempotency/complete`)**:
+   Lưu kết quả HTTP status và body, đồng thời phát sóng (broadcast) kết quả cho toàn bộ kết nối đang chờ trong `ParkingLot`.
+3. **Fail (`GK.IDEM_FAIL` / `POST /v1/idempotency/fail`)**:
+   Ghi nhận trạng thái thất bại và đánh thức các kết nối đang chờ.
+4. **Tra cứu (`GK.IDEM_GET <key>`)**:
+   Lấy trạng thái idempotency và kết quả lưu tạm của key.
+
+---
+
+#### G. Lưu Trữ Bền Vững AOF & Phục Hồi Sau Sự Cố
+
+GateKeeper tích hợp engine ghi log thay đổi trạng thái (Append-Only File):
+
+- **Các lệnh được ghi nhật ký**: Các lệnh thay đổi dữ liệu (`SET`, `DEL`, `PEXPIRE`, `GK.QUOTA_INIT`, `GK.RESERVE`, `GK.COMMIT`, `GK.ROLLBACK`, `GK.IDEM_BEGIN`, `GK.IDEM_COMPLETE`, `GK.IDEM_FAIL`).
+- **Chế độ fsync**:
+  - `always`: Đồng bộ ổ cứng sau mỗi lệnh (độ an toàn cao nhất).
+  - `everysec`: Đồng bộ định kỳ mỗi giây (cân bằng giữa tốc độ và độ an toàn).
+  - `no`: Dựa vào cơ chế xả cache tự nhiên của hệ điều hành.
+- **Phục hồi tự động**: Tự động đọc lại file AOF khi khởi động, khôi phục toàn bộ trạng thái dữ liệu và tự xử lý các lệnh bị đứt đoạn do sự cố mất nguồn đột ngột.
 
 ---
 
@@ -449,15 +632,15 @@ cd GateKeeper
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# Chạy kiểm thử tự động toàn diện (20/20 test target)
+# Chạy kiểm thử tự động toàn diện (26/26 test target)
 ctest --test-dir build --output-on-failure
 ```
 
 #### Khởi Chạy Máy Chủ
 
 ```bash
-# Lắng nghe cổng nhị phân 63779 và cổng HTTP 8080 với chu kỳ quét dọn dẹp 50ms
-./build/gatekeeper --port 63779 --http-port 8080 --timer 50 --log terminal
+# Lắng nghe cổng nhị phân 63779, cổng HTTP 8080, kích hoạt AOF persistence
+./build/gatekeeper --port 63779 --http-port 8080 --persistence aof --data-dir ./data --fsync everysec --timer 50 --log terminal
 ```
 
 Các tham số dòng lệnh:
@@ -466,6 +649,9 @@ Các tham số dòng lệnh:
 - `-t, --timer <ms>`: Chu kỳ mili-giây quét dọn dẹp key hết hạn (`-1` để tắt).
 - `-l, --log <mode>`: Chế độ ghi log (`none`, `terminal`, `file`).
 - `-d, --log-dir <dir>`: Thư mục chứa file log khi dùng chế độ file.
+- `--persistence <mode>`: Chế độ lưu trữ bền vững (`none` hoặc `aof`, mặc định: `none`).
+- `--data-dir <dir>`: Thư mục chứa file dữ liệu AOF (mặc định: `./data`).
+- `--fsync <policy>`: Chính sách đồng bộ ổ cứng cho AOF (`always`, `everysec`, `no`, mặc định: `everysec`).
 
 #### Sử Dụng Trình Điều Khiển Dòng Lệnh (`gate`)
 
@@ -481,48 +667,100 @@ Các tham số dòng lệnh:
 
 ---
 
-### 5. Hướng Dẫn Xây Dựng SDK và Middleware
+### 5. Hướng Dẫn Sử Dụng SDK và Middleware
 
-Lập trình viên có thể tích hợp GateKeeper vào bất kỳ ngôn ngữ nào thông qua giao thức nhị phân GKWP hoặc giao diện HTTP REST.
+GateKeeper cung cấp thư viện SDK chính thức cho cả Go và Node.js/NestJS. Cả hai SDK đều sử dụng giao thức nhị phân **GKWP TCP làm mặc định** nhằm tối ưu độ trễ, đồng thời hỗ trợ chế độ HTTP fallback.
 
-#### Phương Án 1: Xây Dựng Middleware Qua HTTP REST (Khuyến Nghị Cho Web Framework)
+#### Go SDK (`sdk/go/`)
 
-Để viết middleware rate-limit cho Go (Gin/Fiber), Node.js (Express/Fastify/NestJS), Python (FastAPI/Django), hoặc Java (Spring Boot), luồng xử lý chuẩn gồm 4 bước:
+```go
+package main
 
+import (
+    "context"
+    "fmt"
+    "github.com/gatekeeper-kv/gatekeeper/sdk/go"
+)
+
+func main() {
+    // Mặc định kết nối TCP GKWP (127.0.0.1:63779)
+    client := gatekeeper.NewClient("127.0.0.1:63779")
+    defer client.Close()
+
+    // Hoặc kết nối qua HTTP fallback:
+    // client := gatekeeper.NewClient("http://127.0.0.1:8080", gatekeeper.WithHTTP())
+
+    ctx := context.Background()
+    resp, err := client.CheckRateLimit(ctx, gatekeeper.RateLimitRequest{
+        Key:      "user:1001",
+        Limit:    10,
+        WindowMs: 60000,
+    })
+    if err == nil && resp.Allowed {
+        fmt.Println("Allowed! Remaining:", resp.Remaining)
+    }
+}
 ```
-[ HTTP Request Từ Client ]
-            |
-            v
-[ Bước 1: Trích xuất Subject Key (Client IP, API Key, User ID) ]
-            |
-            v
-[ Bước 2: Gửi POST tới GateKeeper /v1/rate-limit/check ]
-            |
-      +-----+------------------------+
-      |                              |
-[ Mã 200 OK: Hợp lệ ]       [ Mã 429: Vượt Ngưỡng ]
-      |                              |
-      v                              v
-Gắn các header X-RateLimit    Gắn các header X-RateLimit và Retry-After
-Cho phép request đi tiếp      Ngắt request: Trả về JSON lỗi 429
+
+- Tích hợp sẵn `RateLimitMiddleware` và `IdempotencyMiddleware` cho `net/http` và framework Gin.
+
+#### Node.js & NestJS SDK (`sdk/nodejs/`)
+
+##### Ứng dụng Node.js thuần / Express
+
+```javascript
+const { GateKeeperClient, createRateLimitMiddleware, createIdempotencyMiddleware } = require('@gatekeeper-kv/client');
+
+// Mặc định kết nối qua TCP GKWP
+const client = new GateKeeperClient({ host: '127.0.0.1', port: 63779 });
+
+// Hoặc kết nối HTTP fallback:
+// const client = new GateKeeperClient({ endpoint: 'http://127.0.0.1:8080' });
+
+const app = express();
+app.use(createRateLimitMiddleware(client, { limit: 100, windowMs: 60000 }));
+app.use(createIdempotencyMiddleware(client));
 ```
 
-Các nguyên tắc kỹ thuật quan trọng khi triển khai middleware:
-- **Tái sử dụng kết nối (Connection Pooling)**: Luôn bật `keep-alive` để tái sử dụng kết nối HTTP nhằm triệt tiêu chi phí bắt tay TCP trong mỗi request.
-- **Chính sách Fail-Open và Fail-Closed**:
-  - Với các API công cộng phục vụ người dùng thông thường: Cấu hình Fail-Open (cho phép request đi tiếp nếu không thể kết nối tới GateKeeper) để tránh làm gián đoạn toàn bộ hệ thống.
-  - Với các API nhạy cảm (đăng nhập, chống tấn công brute-force, thanh toán): Cấu hình Fail-Closed (chặn request và trả về lỗi 503) để đảm bảo an toàn tối đa.
-- **Truyền tiếp Header**: Luôn chuyển tiếp `X-RateLimit-Limit`, `X-RateLimit-Remaining`, và `X-RateLimit-Reset` về phía client frontend để ứng dụng tự điều tiết tần suất gửi request.
+##### Tích hợp NestJS Dynamic Module
 
-#### Phương Án 2: Kết Nối Bằng Giao Thức Nhị Phân GKWP (Độ Trễ Tối Thiểu)
+```typescript
+import { Module } from '@nestjs/common';
+import { GateKeeperModule, GateKeeperService } from '@gatekeeper-kv/client';
 
-Dành cho các dịch vụ nội bộ (microservices) cần thông lượng cao:
-1. Thiết lập kết nối TCP socket duy trì lâu dài tới cổng `63779`.
-2. Tạo chuỗi JSON theo cấu trúc: `{"id": id, "op": op, "body": args}`.
-3. Chèn 4 byte tiền tố chứa độ dài chuỗi JSON (dưới dạng Big-Endian 32-bit).
-4. Gửi toàn bộ buffer qua socket.
-5. Đọc 4 byte đầu tiên từ phản hồi để xác định độ dài gói tin, sau đó đọc đủ số byte payload tương ứng.
+@Module({
+  imports: [
+    GateKeeperModule.forRoot({
+      host: '127.0.0.1',
+      port: 63779, // Mặc định GKWP TCP
+    }),
+    // Hoặc cấu hình bất đồng bộ (async):
+    // GateKeeperModule.forRootAsync({
+    //   useFactory: (config: ConfigService) => ({
+    //     host: config.get('GATEKEEPER_HOST'),
+    //     port: config.get('GATEKEEPER_PORT'),
+    //   }),
+    //   inject: [ConfigService],
+    // }),
+  ],
+})
+export class AppModule {}
+```
 
-Mã nguồn triển khai hoàn chỉnh được cung cấp sẵn tại thư mục `sdk/go/` và `sdk/nodejs/`.
+Inject và sử dụng `GateKeeperService`:
 
----
+```typescript
+@Injectable()
+export class OrderService {
+  constructor(private readonly gkService: GateKeeperService) {}
+
+  async createOrder(userId: string) {
+    const rl = await this.gkService.checkRateLimit({
+      key: `order:${userId}`,
+      limit: 5,
+      windowMs: 60000,
+    });
+    // Xử lý logic đơn hàng...
+  }
+}
+```
