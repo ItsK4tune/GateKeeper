@@ -27,6 +27,9 @@ private:
     net::HttpResponse HandleQuotaCommit(const net::HttpRequest& req);
     net::HttpResponse HandleQuotaRollback(const net::HttpRequest& req);
     net::HttpResponse HandleQuotaInit(const net::HttpRequest& req);
+    net::HttpResponse HandleIdempotencyBegin(const net::HttpRequest& req);
+    net::HttpResponse HandleIdempotencyComplete(const net::HttpRequest& req);
+    net::HttpResponse HandleIdempotencyFail(const net::HttpRequest& req);
 
     static net::HttpResponse BadRequest(const std::string& message);
 };

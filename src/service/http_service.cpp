@@ -45,10 +45,22 @@ net::HttpResponse HttpService::Handle(const net::HttpRequest& req)
     {
         return HandleQuotaInit(req);
     }
+    if (req.method == "POST" && req.path == "/v1/idempotency/begin")
+    {
+        return HandleIdempotencyBegin(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/idempotency/complete")
+    {
+        return HandleIdempotencyComplete(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/idempotency/fail")
+    {
+        return HandleIdempotencyFail(req);
+    }
 
     if (req.path == "/healthz" || req.path == "/v1/rate-limit/check" ||
         req.path == "/v1/quota/reserve" || req.path == "/v1/quota/commit" ||
-        req.path == "/v1/quota/rollback" || req.path == "/v1/quota/init")
+        req.path == "/v1/quota/rollback" || req.path == "/v1/quota/init" || req.path == "/v1/idempotency/begin" || req.path == "/v1/idempotency/complete" || req.path == "/v1/idempotency/fail")
     {
         net::HttpResponse res;
         res.status_code = 405;
@@ -501,6 +513,290 @@ net::HttpResponse HttpService::HandleQuotaInit(const net::HttpRequest& req)
     resp.status_code = 200;
     resp.status_text = "OK";
     resp.body = "{\"ok\":true,\"quota\":" + std::to_string(quota) + "}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleIdempotencyBegin(const net::HttpRequest& req)
+{
+    if (req.body.empty())
+    {
+        return BadRequest("missing JSON body");
+    }
+
+    std::string key;
+    std::string request_hash;
+    std::uint64_t ttl_ms = 60000;
+    std::string owner_token;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "key")
+            {
+                key = reader.String();
+            }
+            else if (field == "request_hash")
+            {
+                request_hash = reader.String();
+            }
+            else if (field == "ttl_ms")
+            {
+                ttl_ms = reader.UnsignedNumber();
+            }
+            else if (field == "ttl_seconds")
+            {
+                ttl_ms = reader.UnsignedNumber() * 1000;
+            }
+            else if (field == "owner_token")
+            {
+                owner_token = reader.String();
+            }
+            else
+            {
+                throw std::invalid_argument("unsupported field: " + field);
+            }
+
+            if (reader.Take('}'))
+            {
+                break;
+            }
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (key.empty() || request_hash.empty())
+    {
+        return BadRequest("key and request_hash are required");
+    }
+
+    const auto res = store_.IdemBegin(key, request_hash, ttl_ms, owner_token);
+    if (!res.ok)
+    {
+        net::HttpResponse resp;
+        if (res.action == storage::IdempotencyAction::Conflict)
+        {
+            resp.status_code = 409;
+            resp.status_text = "Conflict";
+        }
+        else
+        {
+            resp.status_code = 400;
+            resp.status_text = "Bad Request";
+        }
+        resp.body = "{\"error\":\"" + res.error_code + "\",\"message\":\"" + res.error_message + "\"}";
+        return resp;
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    std::string body = "{\"action\":";
+    switch (res.action)
+    {
+    case storage::IdempotencyAction::Execute:
+        body += "\"EXECUTE\"";
+        break;
+    case storage::IdempotencyAction::Park:
+        body += "\"PARK\"";
+        break;
+    case storage::IdempotencyAction::Replay:
+        body += "\"REPLAY\"";
+        break;
+    default:
+        body += "\"UNKNOWN\"";
+        break;
+    }
+    body += ",\"owner_token\":" + protocol::QuoteJson(res.owner_token);
+    if (res.action == storage::IdempotencyAction::Replay)
+    {
+        body += ",\"response_code\":" + std::to_string(res.cached_code);
+        body += ",\"response_body\":" + protocol::QuoteJson(res.cached_response);
+    }
+    body += "}";
+    resp.body = std::move(body);
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleIdempotencyComplete(const net::HttpRequest& req)
+{
+    if (req.body.empty())
+    {
+        return BadRequest("missing JSON body");
+    }
+
+    std::string key;
+    std::string owner_token;
+    int response_code = 200;
+    std::string response_body;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "key")
+            {
+                key = reader.String();
+            }
+            else if (field == "owner_token")
+            {
+                owner_token = reader.String();
+            }
+            else if (field == "response_code")
+            {
+                response_code = static_cast<int>(reader.SignedNumber());
+            }
+            else if (field == "response_body")
+            {
+                response_body = reader.String();
+            }
+            else
+            {
+                throw std::invalid_argument("unsupported field: " + field);
+            }
+
+            if (reader.Take('}'))
+            {
+                break;
+            }
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (key.empty() || owner_token.empty())
+    {
+        return BadRequest("key and owner_token are required");
+    }
+
+    const auto res = store_.IdemComplete(key, owner_token, response_code, response_body);
+    if (!res.ok)
+    {
+        net::HttpResponse resp;
+        if (res.error_code == "ERR_TOKEN_MISMATCH")
+        {
+            resp.status_code = 403;
+            resp.status_text = "Forbidden";
+        }
+        else if (res.error_code == "ERR_NOT_FOUND" || res.error_code == "ERR_EXPIRED")
+        {
+            resp.status_code = 404;
+            resp.status_text = "Not Found";
+        }
+        else
+        {
+            resp.status_code = 400;
+            resp.status_text = "Bad Request";
+        }
+        resp.body = "{\"error\":\"" + res.error_code + "\",\"message\":\"" + res.error_message + "\"}";
+        return resp;
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"completed\":true}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleIdempotencyFail(const net::HttpRequest& req)
+{
+    if (req.body.empty())
+    {
+        return BadRequest("missing JSON body");
+    }
+
+    std::string key;
+    std::string owner_token;
+    std::string error_message;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "key")
+            {
+                key = reader.String();
+            }
+            else if (field == "owner_token")
+            {
+                owner_token = reader.String();
+            }
+            else if (field == "error_message")
+            {
+                error_message = reader.String();
+            }
+            else
+            {
+                throw std::invalid_argument("unsupported field: " + field);
+            }
+
+            if (reader.Take('}'))
+            {
+                break;
+            }
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (key.empty() || owner_token.empty())
+    {
+        return BadRequest("key and owner_token are required");
+    }
+
+    const auto res = store_.IdemFail(key, owner_token, error_message);
+    if (!res.ok)
+    {
+        net::HttpResponse resp;
+        if (res.error_code == "ERR_TOKEN_MISMATCH")
+        {
+            resp.status_code = 403;
+            resp.status_text = "Forbidden";
+        }
+        else if (res.error_code == "ERR_NOT_FOUND" || res.error_code == "ERR_EXPIRED")
+        {
+            resp.status_code = 404;
+            resp.status_text = "Not Found";
+        }
+        else
+        {
+            resp.status_code = 400;
+            resp.status_text = "Bad Request";
+        }
+        resp.body = "{\"error\":\"" + res.error_code + "\",\"message\":\"" + res.error_message + "\"}";
+        return resp;
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"failed\":true}";
     return resp;
 }
 

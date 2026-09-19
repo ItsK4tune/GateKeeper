@@ -159,6 +159,45 @@ class GateKeeperClient {
     };
   }
 
+  async idemBegin({ key, requestHash, ttlMs, ownerToken }) {
+    const body = { key, request_hash: requestHash };
+    if (ttlMs !== undefined) body.ttl_ms = ttlMs;
+    if (ownerToken !== undefined) body.owner_token = ownerToken;
+    const res = await this._request('/v1/idempotency/begin', 'POST', body);
+    if (res.status === 409) {
+      throw new GateKeeperError(res.data.message || 'Idempotency conflict', 409, res.data);
+    }
+    if (res.status !== 200) {
+      throw new GateKeeperError(`Idempotency begin failed: ${res.data.message || res.status}`, res.status, res.data);
+    }
+    return res.data;
+  }
+
+  async idemComplete({ key, ownerToken, responseCode, responseBody }) {
+    const res = await this._request('/v1/idempotency/complete', 'POST', {
+      key,
+      owner_token: ownerToken,
+      response_code: responseCode,
+      response_body: responseBody,
+    });
+    if (res.status !== 200) {
+      throw new GateKeeperError(`Idempotency complete failed: ${res.data.message || res.status}`, res.status, res.data);
+    }
+    return res.data;
+  }
+
+  async idemFail({ key, ownerToken, errorMessage }) {
+    const res = await this._request('/v1/idempotency/fail', 'POST', {
+      key,
+      owner_token: ownerToken,
+      error_message: errorMessage,
+    });
+    if (res.status !== 200) {
+      throw new GateKeeperError(`Idempotency fail failed: ${res.data.message || res.status}`, res.status, res.data);
+    }
+    return res.data;
+  }
+
   async rollbackQuota({ key, reservationId }) {
     const res = await this._request('/v1/quota/rollback', 'POST', {
       key,

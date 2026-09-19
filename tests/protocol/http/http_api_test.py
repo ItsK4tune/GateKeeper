@@ -146,6 +146,65 @@ try:
         require(data.get("refunded") == 50, "refunded amount mismatch")
         require(data.get("remaining") == 75, f"remaining after rollback should be 75, got {data.get('remaining')}")
 
+    # 3.6 Test Idempotency HTTP API
+    # Begin
+    idem_begin_payload = json.dumps({"key": "order_http_1", "request_hash": "hash_val_1", "ttl_ms": 60000}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/idempotency/begin", data=idem_begin_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "idem begin status != 200")
+        bdata = json.loads(resp.read().decode())
+        require(bdata.get("action") == "EXECUTE", "expected action EXECUTE")
+        owner_token = bdata.get("owner_token")
+        require(bool(owner_token), "expected non-empty owner_token")
+
+    # Duplicate in-progress -> PARK
+    req = urllib.request.Request(f"{base_url}/v1/idempotency/begin", data=idem_begin_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "idem duplicate begin status != 200")
+        bdata = json.loads(resp.read().decode())
+        require(bdata.get("action") == "PARK", "expected action PARK")
+
+    # Hash mismatch -> 409 Conflict
+    conflict_payload = json.dumps({"key": "order_http_1", "request_hash": "hash_different", "ttl_ms": 60000}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/idempotency/begin", data=conflict_payload, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=3)
+        require(False, "expected 409 conflict")
+    except urllib.error.HTTPError as e:
+        require(e.code == 409, f"expected 409, got {e.code}")
+
+    # Complete
+    complete_payload = json.dumps({"key": "order_http_1", "owner_token": owner_token, "response_code": 201, "response_body": "{\"id\":\"created_1\"}"}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/idempotency/complete", data=complete_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "idem complete status != 200")
+        cdata = json.loads(resp.read().decode())
+        require(cdata.get("completed") is True, "expected completed=True")
+
+    # Replay
+    req = urllib.request.Request(f"{base_url}/v1/idempotency/begin", data=idem_begin_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "idem replay begin status != 200")
+        rdata = json.loads(resp.read().decode())
+        require(rdata.get("action") == "REPLAY", "expected action REPLAY")
+        require(rdata.get("response_code") == 201, "expected cached code 201")
+        require(rdata.get("response_body") == "{\"id\":\"created_1\"}", "expected cached response body")
+
+    # Fail test on another key
+    fail_begin = json.dumps({"key": "order_http_2", "request_hash": "hash_fail_2", "ttl_ms": 60000}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/idempotency/begin", data=fail_begin, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        bdata2 = json.loads(resp.read().decode())
+        tok2 = bdata2.get("owner_token")
+
+    fail_payload = json.dumps({"key": "order_http_2", "owner_token": tok2, "error_message": "gateway timeout"}).encode()
+    req = urllib.request.Request(f"{base_url}/v1/idempotency/fail", data=fail_payload, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        require(resp.status == 200, "idem fail status != 200")
+        fdata = json.loads(resp.read().decode())
+        require(fdata.get("failed") is True, "expected failed=True")
+
+
     # 4. Error Cases
     # 4.1 404 Not Found
     try:
