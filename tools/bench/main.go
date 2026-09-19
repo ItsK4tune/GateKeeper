@@ -80,7 +80,7 @@ func runGkwpWorker(cfg Config, reqsPerWorker int64, frame []byte, stopCh <-chan 
 		default:
 		}
 
-		if cfg.Duration == 0 && completed >= reqsPerWorker {
+		if cfg.Duration == 0 && (completed+failed) >= reqsPerWorker {
 			break
 		}
 
@@ -142,7 +142,7 @@ func runHttpWorker(cfg Config, reqsPerWorker int64, client *http.Client, url str
 		default:
 		}
 
-		if cfg.Duration == 0 && completed >= reqsPerWorker {
+		if cfg.Duration == 0 && (completed+failed) >= reqsPerWorker {
 			break
 		}
 
@@ -170,7 +170,7 @@ func runHttpWorker(cfg Config, reqsPerWorker int64, client *http.Client, url str
 		resp.Body.Close()
 
 		elapsed := time.Since(start)
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if (resp.StatusCode >= 200 && resp.StatusCode < 300) || (cfg.Op == "rate-limit" && resp.StatusCode == 429) {
 			completed++
 			if len(localLatencies) < 50000 {
 				localLatencies = append(localLatencies, elapsed)
