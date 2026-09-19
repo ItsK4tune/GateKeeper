@@ -1,6 +1,7 @@
-﻿#include "gatekeeper/net/client.h"
+#include "gatekeeper/net/client.h"
 #include "gatekeeper/net/error.h"
-#include "gatekeeper/protocol/gkwp/frame.h"
+#include "gatekeeper/protocol/gkwp2/header.h"
+#include "gatekeeper/protocol/gkwp2/frame.h"
 
 #include <array>
 #include <cerrno>
@@ -214,29 +215,54 @@ std::string Client::Execute(const std::string& operation, const std::string& bod
     Open();
     try
     {
-        const auto req_id = "gate-" + std::to_string(next_id_++);
+        const auto req_num = next_id_++;
+        const auto req_id = "gate-" + std::to_string(req_num);
         const auto payload = "{\"id\":\"" + req_id +
                              "\",\"op\":\"" + operation + "\",\"body\":" + body + "}";
         logger_->Info("Sending request id=\"" + req_id + "\" op=\"" + operation + "\"");
-        SendAll(protocol::EncodeFrame(payload));
-        logger_->Debug("Sent request frame for id=\"" + req_id + "\"");
 
-        std::array<std::uint8_t, 4> header{};
-        ReadAll(header);
-        const auto length = (static_cast<std::uint32_t>(header[0]) << 24U) |
-                            (static_cast<std::uint32_t>(header[1]) << 16U) |
-                            (static_cast<std::uint32_t>(header[2]) << 8U) | header[3];
-        if (length == 0 || length > protocol::kMaxFrameSize)
+        protocol::gkwp2::Header hdr{};
+        hdr.magic = protocol::gkwp2::kMagic;
+        hdr.version = protocol::gkwp2::kVersion;
+        hdr.flags = protocol::gkwp2::flags::kEndStream;
+        hdr.msg_type = static_cast<std::uint8_t>(protocol::gkwp2::MsgType::Request);
+        hdr.request_id = req_num;
+        hdr.stream_id = 1;
+        hdr.payload_len = static_cast<std::uint32_t>(payload.size());
+
+        SendAll(protocol::gkwp2::EncodeFrame(hdr, payload));
+        logger_->Debug("Sent GKWP/2 request frame for id=\"" + req_id + "\"");
+
+        std::array<std::uint8_t, protocol::gkwp2::kHeaderSize> header_buf{};
+        ReadAll(header_buf);
+
+        const auto magic = (static_cast<std::uint16_t>(header_buf[0]) << 8U) | header_buf[1];
+        if (magic != protocol::gkwp2::kMagic)
         {
-            const auto err_msg = "INVALID_FRAME: response from " + host_ + ':' + std::to_string(port_) +
-                                 " declares " + std::to_string(length) + " bytes; expected 1..1048576.";
+            const auto err_msg = "INVALID_MAGIC: expected GKWP/2 magic from " + host_ + ':' + std::to_string(port_);
             logger_->Error(err_msg);
             throw std::runtime_error(err_msg);
         }
+
+        const auto length = (static_cast<std::uint32_t>(header_buf[20]) << 24U) |
+                            (static_cast<std::uint32_t>(header_buf[21]) << 16U) |
+                            (static_cast<std::uint32_t>(header_buf[22]) << 8U) | header_buf[23];
+
+        if (length > protocol::gkwp2::kMaxPayloadLength)
+        {
+            const auto err_msg = "INVALID_FRAME: response from " + host_ + ':' + std::to_string(port_) +
+                                 " declares " + std::to_string(length) + " bytes; exceeds limit.";
+            logger_->Error(err_msg);
+            throw std::runtime_error(err_msg);
+        }
+
         std::vector<std::uint8_t> response_bytes(length);
-        ReadAll(response_bytes);
+        if (length > 0)
+        {
+            ReadAll(response_bytes);
+        }
         std::string response(response_bytes.begin(), response_bytes.end());
-        logger_->Info("Received GKWP response: " + response);
+        logger_->Info("Received GKWP/2 response: " + response);
         return response;
     }
     catch (...)

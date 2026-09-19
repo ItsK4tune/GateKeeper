@@ -34,19 +34,22 @@ def peer_error(gate, mode, expected):
                 with connection:
                     connection.settimeout(5)
                     data = b""
-                    while len(data) < 4:
-                        chunk = connection.recv(4 - len(data))
+                    while len(data) < 24:
+                        chunk = connection.recv(24 - len(data))
                         require(chunk, "request header EOF")
                         data += chunk
-                    remaining = struct.unpack(">I", data)[0]
+                    remaining = struct.unpack(">I", data[20:24])[0]
                     while remaining:
                         chunk = connection.recv(remaining)
                         require(chunk, "request body EOF")
                         remaining -= len(chunk)
-                    if mode == "partial":
-                        connection.sendall(b"\x00\x00")
+                    if mode == "closed":
+                        return
+                    elif mode == "partial":
+                        connection.sendall(b"\x47\x4B")
                     elif mode == "oversized":
-                        connection.sendall(struct.pack(">I", 1048577))
+                        hdr = struct.pack(">HBBBBBBQII", 0x474B, 2, 8, 2, 0, 0, 0, 1, 1, 16777217)
+                        connection.sendall(hdr)
                     elif mode == "timeout":
                         release.wait(8)
             except Exception as error:

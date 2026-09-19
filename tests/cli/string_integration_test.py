@@ -1,5 +1,6 @@
-﻿import json
+import json
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -32,9 +33,12 @@ try:
             return data
         def request(body):
             packet = json.dumps({"id": 'id"quoted', "op": "SET", "body": body}).encode()
-            wire.sendall(len(packet).to_bytes(4, "big") + packet)
-            size = int.from_bytes(read_exact(4), "big")
-            return json.loads(read_exact(size))
+            header = struct.pack(">HBBBBBBQII", 0x474B, 2, 8, 1, 0, 0, 0, 1, 1, len(packet))
+            wire.sendall(header + packet)
+            resp_hdr = read_exact(24)
+            magic, ver, flags, msg_type, _, _, _, req_id, stream_id, length = struct.unpack(">HBBBBBBQII", resp_hdr)
+            assert magic == 0x474B
+            return json.loads(read_exact(length))
         result = request({"key": "unicode", "value": 'Vi???t ???? " \\ \n'})
         assert result["ok"] and result["id"] == 'id"quoted'
         result = request({"key": "unicode", "value": "bad", 'unexpected"field': True})

@@ -1,5 +1,6 @@
-﻿#include "gatekeeper/net/connection.h"
-#include "gatekeeper/protocol/gkwp/frame.h"
+#include "gatekeeper/net/connection.h"
+#include "gatekeeper/protocol/gkwp2/header.h"
+#include "gatekeeper/protocol/gkwp2/frame.h"
 
 #include <array>
 #include <iostream>
@@ -32,7 +33,16 @@ void TestConnection(bool handler_throws)
     };
     try
     {
-        const auto frame = gatekeeper::protocol::EncodeFrame("input");
+        gatekeeper::protocol::gkwp2::Header hdr{};
+        hdr.magic = gatekeeper::protocol::gkwp2::kMagic;
+        hdr.version = gatekeeper::protocol::gkwp2::kVersion;
+        hdr.flags = gatekeeper::protocol::gkwp2::flags::kEndStream;
+        hdr.msg_type = static_cast<std::uint8_t>(gatekeeper::protocol::gkwp2::MsgType::Request);
+        hdr.request_id = 1;
+        hdr.stream_id = 1;
+        hdr.payload_len = 5;
+
+        const auto frame = gatekeeper::protocol::gkwp2::EncodeFrame(hdr, "input");
         Require(send(sockets[1], frame.data(), frame.size(), 0) == static_cast<ssize_t>(frame.size()), "write failed");
         shutdown(sockets[1], SHUT_WR);
         bool threw = false;
@@ -52,7 +62,8 @@ void TestConnection(bool handler_throws)
         {
             response.insert(response.end(), bytes.begin(), bytes.begin() + received);
         }
-        Require(handler_throws ? response.empty() : response == gatekeeper::protocol::EncodeFrame("output"),
+        const auto expected = gatekeeper::protocol::gkwp2::EncodeResponse(1, 1, "output", true);
+        Require(handler_throws ? response.empty() : response == expected,
                 "response differs from injected handler");
         close(sockets[1]);
     }

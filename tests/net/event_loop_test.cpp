@@ -1,6 +1,7 @@
 #include "gatekeeper/net/channel.h"
 #include "gatekeeper/net/event_loop.h"
-#include "gatekeeper/protocol/gkwp/frame.h"
+#include "gatekeeper/protocol/gkwp2/header.h"
+#include "gatekeeper/protocol/gkwp2/frame.h"
 
 #include <array>
 #include <fcntl.h>
@@ -50,7 +51,16 @@ void TestEventLoopAndChannel()
         ch_ptr->HandleEvents(ev);
     });
 
-    const auto frame = gatekeeper::protocol::EncodeFrame("ping");
+    gatekeeper::protocol::gkwp2::Header hdr{};
+    hdr.magic = gatekeeper::protocol::gkwp2::kMagic;
+    hdr.version = gatekeeper::protocol::gkwp2::kVersion;
+    hdr.flags = gatekeeper::protocol::gkwp2::flags::kEndStream;
+    hdr.msg_type = static_cast<std::uint8_t>(gatekeeper::protocol::gkwp2::MsgType::Request);
+    hdr.request_id = 1;
+    hdr.stream_id = 1;
+    hdr.payload_len = 4;
+
+    const auto frame = gatekeeper::protocol::gkwp2::EncodeFrame(hdr, "ping");
 
     for (std::size_t i = 0; i < frame.size(); ++i)
     {
@@ -64,7 +74,7 @@ void TestEventLoopAndChannel()
     const auto n = read(sp[1], resp_buf.data(), resp_buf.size());
     Require(n > 0, "response not received");
 
-    const auto expected = gatekeeper::protocol::EncodeFrame("pong");
+    const auto expected = gatekeeper::protocol::gkwp2::EncodeResponse(1, 1, "pong", true);
     Require(n == static_cast<ssize_t>(expected.size()), "response size wrong");
 
     channel->Close();

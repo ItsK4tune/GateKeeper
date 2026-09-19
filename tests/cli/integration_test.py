@@ -1,4 +1,4 @@
-﻿import json
+import json
 import socket
 import struct
 import subprocess
@@ -34,10 +34,13 @@ def round_trip(executable, repl):
             connection, _ = listener.accept()
             with connection:
                 connection.settimeout(5)
-                length = struct.unpack(">I", read_all(connection, 4))[0]
+                hdr = read_all(connection, 24)
+                magic, ver, flags, msg_type, _, _, _, req_id, stream_id, length = struct.unpack(">HBBBBBBQII", hdr)
+                require(magic == 0x474B, "invalid GKWP/2 magic")
                 requests.append(json.loads(read_all(connection, length)))
                 payload = json.dumps({"id": "gate-1", "ok": True, "result": {"pong": True}}).encode()
-                packet = struct.pack(">I", len(payload)) + payload
+                resp_hdr = struct.pack(">HBBBBBBQII", 0x474B, 2, 8, 2, 0, 0, 0, req_id, stream_id, len(payload))
+                packet = resp_hdr + payload
                 for byte in packet:
                     connection.sendall(bytes([byte]))
                 require(connection.recv(1) == b"", "CLI sent an extra request after PING")

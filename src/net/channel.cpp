@@ -1,6 +1,4 @@
 #include "gatekeeper/net/channel.h"
-#include "gatekeeper/protocol/gkwp/frame.h"
-#include "gatekeeper/protocol/gkwp/response.h"
 #include "gatekeeper/protocol/gkwp2/frame.h"
 
 #include <array>
@@ -70,38 +68,23 @@ void Channel::HandleRead()
         if (received > 0)
         {
             session_.AddBytesReceived(static_cast<std::size_t>(received));
-            std::vector<InboundMessage> messages;
+            std::vector<protocol::gkwp2::Frame> frames;
             std::string error;
-            if (!session_.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), messages, error))
+            if (!session_.Push(std::span(buffer.data(), static_cast<std::size_t>(received)), frames, error))
             {
-                if (session_.Protocol() == ProtocolType::Gkwp2)
-                {
-                    const auto err_frame = protocol::gkwp2::EncodeError(0, 0, "PROTOCOL_ERROR", error, true);
-                    Send(err_frame);
-                }
-                else
-                {
-                    const auto err_response = protocol::EncodeErrorResponse("", {"PROTOCOL_ERROR", error});
-                    Send(protocol::EncodeFrame(err_response));
-                }
+                const auto err_frame = protocol::gkwp2::EncodeError(0, 0, "PROTOCOL_ERROR", error, true);
+                Send(err_frame);
                 Close();
                 return;
             }
-            for (const auto& msg : messages)
+            for (const auto& frame : frames)
             {
                 session_.IncrementRequests();
-                const auto response = handler_(msg.payload);
-                if (msg.protocol == ProtocolType::Gkwp2)
-                {
-                    const auto resp_frame = protocol::gkwp2::EncodeResponse(
-                        msg.request_id, msg.stream_id, response,
-                        (msg.flags & protocol::gkwp2::flags::kEndStream) != 0);
-                    Send(resp_frame);
-                }
-                else
-                {
-                    Send(protocol::EncodeFrame(response));
-                }
+                const auto response = handler_(frame.payload);
+                const auto resp_frame = protocol::gkwp2::EncodeResponse(
+                    frame.header.request_id, frame.header.stream_id, response,
+                    (frame.header.flags & protocol::gkwp2::flags::kEndStream) != 0);
+                Send(resp_frame);
                 if (closed_)
                 {
                     return;
