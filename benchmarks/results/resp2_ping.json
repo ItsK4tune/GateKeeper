@@ -1,0 +1,21 @@
+{
+  "protocol": "Redis RESP2",
+  "operation": "ping",
+  "target": "127.0.0.1:8080",
+  "concurrency": 50,
+  "duration_sec": 2.224432829,
+  "total_requests": 50000,
+  "successful": 50000,
+  "failed": 0,
+  "qps": 22477.639849649964,
+  "latencies_ms": {
+    "min": 0.037,
+    "avg": 2.159,
+    "p50": 2.04,
+    "p90": 3.203,
+    "p95": 3.843,
+    "p99": 4.836,
+    "p999": 6.493,
+    "max": 17.378
+  }
+}

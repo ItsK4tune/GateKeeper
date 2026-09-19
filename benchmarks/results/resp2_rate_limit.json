@@ -1,0 +1,21 @@
+{
+  "protocol": "Redis RESP2",
+  "operation": "rate-limit",
+  "target": "127.0.0.1:8080",
+  "concurrency": 50,
+  "duration_sec": 3.264772071,
+  "total_requests": 50000,
+  "successful": 50000,
+  "failed": 0,
+  "qps": 15315.004818907617,
+  "latencies_ms": {
+    "min": 0.05,
+    "avg": 3.181,
+    "p50": 3.042,
+    "p90": 4.209,
+    "p95": 5.37,
+    "p99": 6.707,
+    "p999": 8.691,
+    "max": 11.757
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "protocol": "Redis RESP3",
+  "operation": "ping",
+  "target": "127.0.0.1:8080",
+  "concurrency": 50,
+  "duration_sec": 2.128888774,
+  "total_requests": 50000,
+  "successful": 50000,
+  "failed": 0,
+  "qps": 23486.431330113257,
+  "latencies_ms": {
+    "min": 0.037,
+    "avg": 2.045,
+    "p50": 1.952,
+    "p90": 2.999,
+    "p95": 3.636,
+    "p99": 4.378,
+    "p999": 5.603,
+    "max": 7.674
+  }
+}
