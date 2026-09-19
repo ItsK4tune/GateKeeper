@@ -1,4 +1,5 @@
-﻿#include "gatekeeper/service/http_service.h"
+#include "gatekeeper/storage/aof/aof_writer.h"
+#include "gatekeeper/service/http_service.h"
 #include "gatekeeper/protocol/gkwp/json_reader.h"
 #include "gatekeeper/protocol/gkwp/response.h"
 
@@ -10,8 +11,11 @@
 namespace gatekeeper::service
 {
 
-HttpService::HttpService(storage::Store& store, std::shared_ptr<log::Logger> logger)
-    : store_(store), logger_(std::move(logger))
+HttpService::HttpService(
+    storage::Store& store,
+    std::shared_ptr<log::Logger> logger,
+    std::shared_ptr<storage::aof::AofWriter> aof_writer)
+    : store_(store), logger_(std::move(logger)), aof_writer_(std::move(aof_writer))
 {
     if (!logger_)
     {
@@ -280,6 +284,13 @@ net::HttpResponse HttpService::HandleQuotaReserve(const net::HttpRequest& req)
     net::HttpResponse resp;
     if (res.reserved)
     {
+        if (aof_writer_)
+        {
+            std::string aof_body = "{\"key\":" + protocol::QuoteJson(key) +
+                                   ",\"amount\":" + std::to_string(amount) +
+                                   ",\"ttl_ms\":" + std::to_string(ttl_ms) + "}";
+            aof_writer_->Append("GK.RESERVE", aof_body);
+        }
         resp.status_code = 200;
         resp.status_text = "OK";
         resp.body = "{\"reserved\":true,\"reservation_id\":\"" + res.reservation_id +
@@ -508,6 +519,12 @@ net::HttpResponse HttpService::HandleQuotaInit(const net::HttpRequest& req)
     }
 
     store_.Set(key, std::to_string(quota), storage::WriteCondition::Always, ttl_ms);
+    if (aof_writer_)
+    {
+        std::string aof_body = "{\"key\":" + protocol::QuoteJson(key) +
+                               ",\"amount\":" + std::to_string(quota) + "}";
+        aof_writer_->Append("GK.QUOTA_INIT", aof_body);
+    }
 
     net::HttpResponse resp;
     resp.status_code = 200;
@@ -623,6 +640,14 @@ net::HttpResponse HttpService::HandleIdempotencyBegin(const net::HttpRequest& re
         body += ",\"response_body\":" + protocol::QuoteJson(res.cached_response);
     }
     body += "}";
+    if (aof_writer_ && res.action == storage::IdempotencyAction::Execute)
+    {
+        std::string aof_body = "{\"key\":" + protocol::QuoteJson(key) +
+                               ",\"request_hash\":" + protocol::QuoteJson(request_hash) +
+                               ",\"ttl_ms\":" + std::to_string(ttl_ms) +
+                               ",\"owner_token\":" + protocol::QuoteJson(res.owner_token) + "}";
+        aof_writer_->Append("GK.IDEM_BEGIN", aof_body);
+    }
     resp.body = std::move(body);
     return resp;
 }
@@ -713,6 +738,14 @@ net::HttpResponse HttpService::HandleIdempotencyComplete(const net::HttpRequest&
     resp.status_code = 200;
     resp.status_text = "OK";
     resp.body = "{\"completed\":true}";
+    if (aof_writer_)
+    {
+        std::string aof_body = "{\"key\":" + protocol::QuoteJson(key) +
+                               ",\"owner_token\":" + protocol::QuoteJson(owner_token) +
+                               ",\"response_code\":" + std::to_string(response_code) +
+                               ",\"response_body\":" + protocol::QuoteJson(response_body) + "}";
+        aof_writer_->Append("GK.IDEM_COMPLETE", aof_body);
+    }
     return resp;
 }
 
@@ -797,6 +830,13 @@ net::HttpResponse HttpService::HandleIdempotencyFail(const net::HttpRequest& req
     resp.status_code = 200;
     resp.status_text = "OK";
     resp.body = "{\"failed\":true}";
+    if (aof_writer_)
+    {
+        std::string aof_body = "{\"key\":" + protocol::QuoteJson(key) +
+                               ",\"owner_token\":" + protocol::QuoteJson(owner_token) +
+                               ",\"error_message\":" + protocol::QuoteJson(error_message) + "}";
+        aof_writer_->Append("GK.IDEM_FAIL", aof_body);
+    }
     return resp;
 }
 

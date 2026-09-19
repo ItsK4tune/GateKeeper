@@ -209,7 +209,15 @@ if(BUILD_TESTING)
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/auto_rollback_test.py
                     $<TARGET_FILE:gatekeeper>)
 
-            set_tests_properties(cli_integration_tests network_error_tests service_port_tests http_api_tests concurrency_rate_limit_tests auto_rollback_tests PROPERTIES TIMEOUT 30)
+                        add_test(NAME idempotency_coalescing_tests
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/idempotency_coalescing_test.py
+                    $<TARGET_FILE:gatekeeper>)
+
+            add_test(NAME idempotency_recovery_tests
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/idempotency_recovery_test.py
+                    $<TARGET_FILE:gatekeeper>)
+
+            set_tests_properties(cli_integration_tests network_error_tests service_port_tests http_api_tests concurrency_rate_limit_tests auto_rollback_tests idempotency_coalescing_tests idempotency_recovery_tests PROPERTIES TIMEOUT 30)
         endif()
     endif()
 endif()

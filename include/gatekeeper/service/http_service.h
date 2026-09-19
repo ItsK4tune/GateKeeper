@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/core/log/logger.h"
 #include "gatekeeper/protocol/http/http_types.h"
@@ -7,19 +7,28 @@
 #include <memory>
 #include <string>
 
+namespace gatekeeper::storage::aof
+{
+class AofWriter;
+}
+
 namespace gatekeeper::service
 {
 
 class HttpService
 {
 public:
-    explicit HttpService(storage::Store& store, std::shared_ptr<log::Logger> logger = log::Logger::Null());
+    explicit HttpService(
+        storage::Store& store,
+        std::shared_ptr<log::Logger> logger = log::Logger::Null(),
+        std::shared_ptr<storage::aof::AofWriter> aof_writer = nullptr);
 
     net::HttpResponse Handle(const net::HttpRequest& req);
 
 private:
     storage::Store& store_;
     std::shared_ptr<log::Logger> logger_;
+    std::shared_ptr<storage::aof::AofWriter> aof_writer_;
 
     net::HttpResponse HandleHealthz(const net::HttpRequest& req);
     net::HttpResponse HandleRateLimitCheck(const net::HttpRequest& req);

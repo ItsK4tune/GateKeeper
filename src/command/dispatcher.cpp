@@ -69,7 +69,33 @@ Result Dispatcher::Dispatch(const protocol::Request& request) const
     auto res = handler->second(request);
     if (res.ok && aof_writer_ && IsWriteOp(request.op))
     {
-        aof_writer_->Append(request.op, request.body_json);
+        if (request.op == "GK.IDEM_BEGIN")
+        {
+            std::string aof_body = request.body_json;
+            if (aof_body.find("\"owner_token\"") == std::string::npos)
+            {
+                auto token_pos = res.result_json.find("\"owner_token\":\"");
+                if (token_pos != std::string::npos)
+                {
+                    token_pos += 15;
+                    auto token_end = res.result_json.find('"', token_pos);
+                    if (token_end != std::string::npos)
+                    {
+                        auto token = res.result_json.substr(token_pos, token_end - token_pos);
+                        auto last_brace = aof_body.rfind('}');
+                        if (last_brace != std::string::npos)
+                        {
+                            aof_body.insert(last_brace, ",\"owner_token\":\"" + token + "\"");
+                        }
+                    }
+                }
+            }
+            aof_writer_->Append(request.op, aof_body);
+        }
+        else
+        {
+            aof_writer_->Append(request.op, request.body_json);
+        }
     }
     return res;
 }
