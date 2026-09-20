@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -79,12 +80,35 @@ void Channel::HandleRead()
             }
             for (const auto& frame : frames)
             {
+                const auto stream_id = frame.header.stream_id;
+                if (stream_id != 0)
+                {
+                    if (!session_.StreamManager().CanOpenStream(stream_id))
+                    {
+                        const auto err_frame = protocol::gkwp2::EncodeError(
+                            frame.header.request_id, stream_id, "TOO_MANY_STREAMS",
+                            "Maximum concurrent streams exceeded", true);
+                        Send(err_frame);
+                        continue;
+                    }
+                    const auto now_ms = static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+                    session_.StreamManager().GetOrCreateStream(stream_id, now_ms);
+                }
+
                 session_.IncrementRequests();
                 const auto response = handler_(frame.payload);
+                const bool is_end_stream = (frame.header.flags & protocol::gkwp2::flags::kEndStream) != 0;
                 const auto resp_frame = protocol::gkwp2::EncodeResponse(
-                    frame.header.request_id, frame.header.stream_id, response,
-                    (frame.header.flags & protocol::gkwp2::flags::kEndStream) != 0);
+                    frame.header.request_id, stream_id, response, is_end_stream);
                 Send(resp_frame);
+
+                if (stream_id != 0 && is_end_stream)
+                {
+                    session_.StreamManager().CloseStream(stream_id);
+                }
+
                 if (closed_)
                 {
                     return;
