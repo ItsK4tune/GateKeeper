@@ -1,3 +1,4 @@
+#include "gatekeeper/domain/lock/lock_wait_queue.h"
 #include "gatekeeper/core/config/server_config.h"
 #include "gatekeeper/command/dispatcher.h"
 #include "gatekeeper/core/log/logger.h"
@@ -95,6 +96,10 @@ int main(int argc, char* argv[])
             if (!released.empty())
             {
                 logger->Info("Auto-released " + std::to_string(released.size()) + " ephemeral locks for disconnected session " + std::to_string(session_id));
+                for (const auto& res : released)
+                {
+                    gatekeeper::domain::lock::GetGlobalLockWaitQueue().WakeNext(dispatcher.GetStore(), res);
+                }
             }
         });
 
