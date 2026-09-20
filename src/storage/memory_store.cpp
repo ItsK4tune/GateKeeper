@@ -207,33 +207,54 @@ std::vector<std::string> MemoryStore::Keys(std::string_view pattern) const
 
 std::pair<std::size_t, std::vector<std::string>> MemoryStore::Scan(std::size_t cursor, std::size_t count) const
 {
-    const auto now = CurrentTimeMs();
-    std::vector<std::string> current_keys;
-    for (const auto& shard : shards_)
+    if (count == 0)
     {
-        const std::lock_guard lock(shard.mutex);
-        shard.entries.ForEach([&](const std::string& key, const Entry& entry) {
-            if (!entry.meta.IsExpired(now))
-            {
-                current_keys.push_back(key);
-            }
-        });
+        count = 10;
     }
 
-    if (cursor >= current_keys.size())
+    const auto now = CurrentTimeMs();
+    std::size_t shard_idx = cursor >> 32;
+    std::size_t bucket_cursor = cursor & 0xFFFFFFFF;
+
+    if (shard_idx >= kNumShards)
     {
         return {0, {}};
     }
 
-    std::vector<std::string> batch;
-    const std::size_t end = std::min(cursor + count, current_keys.size());
-    for (std::size_t i = cursor; i < end; ++i)
+    std::vector<std::string> result;
+    while (shard_idx < kNumShards && result.size() < count)
     {
-        batch.push_back(current_keys[i]);
+        auto& shard = shards_[shard_idx];
+        const std::lock_guard lock(shard.mutex);
+
+        auto [next_bucket_cursor, keys] = shard.entries.Scan(bucket_cursor, count - result.size());
+        for (const auto& key : keys)
+        {
+            auto* entry = shard.entries.Find(key);
+            if (entry != nullptr && !entry->meta.IsExpired(now))
+            {
+                result.push_back(key);
+            }
+        }
+
+        if (next_bucket_cursor == 0)
+        {
+            ++shard_idx;
+            bucket_cursor = 0;
+        }
+        else
+        {
+            bucket_cursor = next_bucket_cursor;
+            break;
+        }
     }
 
-    std::size_t next_cursor = end >= current_keys.size() ? 0 : end;
-    return {next_cursor, std::move(batch)};
+    std::size_t next_cursor = 0;
+    if (shard_idx < kNumShards)
+    {
+        next_cursor = (shard_idx << 32) | (bucket_cursor & 0xFFFFFFFF);
+    }
+    return {next_cursor, std::move(result)};
 }
 
 bool MemoryStore::Expire(std::string_view key, std::uint64_t ttl_ms)
