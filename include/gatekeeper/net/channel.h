@@ -5,6 +5,7 @@
 #include "gatekeeper/net/request_handler.h"
 #include "gatekeeper/net/session.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -40,6 +41,7 @@ private:
     std::shared_ptr<log::Logger> logger_;
     Session session_;
     std::vector<std::uint8_t> write_buffer_;
+    std::size_t write_offset_{0};
     bool closed_{false};
 };
 

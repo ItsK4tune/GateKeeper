@@ -118,6 +118,11 @@ void Channel::Send(std::span<const std::uint8_t> data)
     {
         return;
     }
+    if (write_offset_ == write_buffer_.size())
+    {
+        write_buffer_.clear();
+        write_offset_ = 0;
+    }
     if (write_buffer_.empty())
     {
         const auto written = send(fd_, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
@@ -142,13 +147,20 @@ void Channel::Send(std::span<const std::uint8_t> data)
 
 void Channel::HandleWrite()
 {
-    while (!closed_ && !write_buffer_.empty())
+    while (!closed_ && write_offset_ < write_buffer_.size())
     {
-        const auto written = send(fd_, write_buffer_.data(), write_buffer_.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+        const auto remaining = write_buffer_.size() - write_offset_;
+        const auto written = send(fd_, write_buffer_.data() + write_offset_, remaining, MSG_DONTWAIT | MSG_NOSIGNAL);
         if (written > 0)
         {
             session_.AddBytesSent(static_cast<std::size_t>(written));
-            write_buffer_.erase(write_buffer_.begin(), write_buffer_.begin() + written);
+            write_offset_ += static_cast<std::size_t>(written);
+            if (write_offset_ == write_buffer_.size())
+            {
+                write_buffer_.clear();
+                write_offset_ = 0;
+                break;
+            }
         }
         else if (written == -1)
         {
@@ -164,8 +176,10 @@ void Channel::HandleWrite()
             return;
         }
     }
-    if (!closed_ && write_buffer_.empty())
+    if (!closed_ && write_offset_ == write_buffer_.size())
     {
+        write_buffer_.clear();
+        write_offset_ = 0;
         loop_.Modify(fd_, EPOLLIN | EPOLLRDHUP | EPOLLERR);
     }
 }
