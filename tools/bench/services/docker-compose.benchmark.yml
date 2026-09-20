@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: gk-bench-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --save "" --appendonly no --tcp-backlog 65535
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    container_name: gk-bench-dragonfly
+    ports:
+      - "6380:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  nginx:
+    image: nginx:alpine
+    container_name: gk-bench-nginx
+    ports:
+      - "8081:80"
+    volumes:
+      - ./configs/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M

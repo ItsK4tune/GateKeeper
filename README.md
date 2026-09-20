@@ -203,7 +203,7 @@ Comprehensive benchmarks were conducted on an Ubuntu 22.04 LTS environment (Linu
 *GateKeeper's C++20 REST API reaches **~100,000 RPS** with **sub-millisecond average latency (638 µs)**, running **3.36x faster than NGINX**.*
 
 > [!NOTE]
-> All benchmark scripts, configurations, and Docker Compose environments are archived and reproducible on branch `bench/service` under `tests/benchmark/`.
+> All benchmark scripts, configurations, and Docker Compose environments are archived and reproducible on branch `bench/service` under `tools/bench/services/`.
 
 ---
 
@@ -755,7 +755,7 @@ Bộ benchmark thực nghiệm được thực hiện trên môi trường Ubunt
 *Cổng REST API HTTP của GateKeeper đạt **gần 100.000 RPS** với **độ trễ trung bình sub-millisecond (638 µs)**, chạy **nhanh hơn 3,36 lần so với NGINX**.*
 
 > [!NOTE]
-> Toàn bộ kịch bản kiểm thử, file cấu hình và Docker Compose được lưu trữ và có thể tái lập tại nhánh `bench/service` trong thư mục `tests/benchmark/`.
+> Toàn bộ kịch bản kiểm thử, file cấu hình và Docker Compose được lưu trữ và có thể tái lập tại nhánh `bench/service` trong thư mục `tools/bench/services/`.
 
 ---
 
