@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <fstream>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -37,7 +36,7 @@ private:
     std::string file_path_;
     FsyncPolicy policy_;
     mutable std::mutex mutex_;
-    std::ofstream file_;
+    int fd_{-1};
 };
 
 }

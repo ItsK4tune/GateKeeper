@@ -1,6 +1,11 @@
 #include "gatekeeper/storage/aof/aof_writer.h"
 
+#include <cerrno>
+#include <fcntl.h>
 #include <filesystem>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 namespace gatekeeper::storage::aof
 {
@@ -13,7 +18,7 @@ AofWriter::AofWriter(std::string file_path, FsyncPolicy policy)
     {
         std::filesystem::create_directories(parent);
     }
-    file_.open(file_path_, std::ios::out | std::ios::app);
+    fd_ = open(file_path_.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
 AofWriter::~AofWriter()
@@ -29,13 +34,39 @@ bool AofWriter::Append(std::string_view op, std::string_view payload_json)
     }
 
     const std::lock_guard lock(mutex_);
-    if (!file_.is_open())
+    if (fd_ == -1)
     {
         return false;
     }
 
-    file_ << op << " " << payload_json << "\n";
-    file_.flush();
+    std::string line;
+    line.reserve(op.size() + 1 + payload_json.size() + 1);
+    line.append(op);
+    line.push_back(' ');
+    line.append(payload_json);
+    line.push_back('\n');
+
+    const char* ptr = line.data();
+    std::size_t remaining = line.size();
+    while (remaining > 0)
+    {
+        const auto written = write(fd_, ptr, remaining);
+        if (written <= 0)
+        {
+            if (written == -1 && errno == EINTR)
+            {
+                continue;
+            }
+            return false;
+        }
+        ptr += written;
+        remaining -= static_cast<std::size_t>(written);
+    }
+
+    if (policy_ == FsyncPolicy::Always)
+    {
+        fdatasync(fd_);
+    }
 
     return true;
 }
@@ -43,26 +74,27 @@ bool AofWriter::Append(std::string_view op, std::string_view payload_json)
 void AofWriter::Fsync()
 {
     const std::lock_guard lock(mutex_);
-    if (file_.is_open())
+    if (fd_ != -1)
     {
-        file_.flush();
+        fdatasync(fd_);
     }
 }
 
 void AofWriter::Close()
 {
     const std::lock_guard lock(mutex_);
-    if (file_.is_open())
+    if (fd_ != -1)
     {
-        file_.flush();
-        file_.close();
+        fdatasync(fd_);
+        close(fd_);
+        fd_ = -1;
     }
 }
 
 bool AofWriter::IsOpen() const noexcept
 {
     const std::lock_guard lock(mutex_);
-    return file_.is_open();
+    return fd_ != -1;
 }
 
 }
