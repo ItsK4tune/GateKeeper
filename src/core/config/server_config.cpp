@@ -19,6 +19,7 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
     bool has_persistence = false;
     bool has_data_dir = false;
     bool has_fsync = false;
+    bool has_workers = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string_view argument = argv[index];
@@ -88,6 +89,24 @@ ServerConfig ServerConfig::Parse(int argc, const char* const* argv)
         {
             config.data_dir = std::string(config::ReadOptionValue(argc, argv, index, "data-dir", has_data_dir));
         }
+                else if (argument == "--workers" || argument == "-w")
+        {
+            const auto value = config::ReadOptionValue(argc, argv, index, "workers", has_workers);
+            if (value == "all" || value == "auto")
+            {
+                config.workers = 0;
+            }
+            else
+            {
+                int w = 0;
+                const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), w);
+                if (error != std::errc{} || end != value.data() + value.size() || w < 1)
+                {
+                    throw std::invalid_argument("INVALID_OPTION: invalid workers count: " + std::string(value) + ". Expected positive integer or 'all'.");
+                }
+                config.workers = static_cast<std::size_t>(w);
+            }
+        }
         else if (argument == "--fsync")
         {
             const auto value = config::ReadOptionValue(argc, argv, index, "fsync", has_fsync);
@@ -114,7 +133,7 @@ std::string_view ServerConfig::Usage()
            "  -l, --log        Logging mode: none, terminal, file (default: none)\n"
            "  -d, --log-dir    Directory to write log file (<dir>/log)\n"
            "  -t, --timer      Periodic timer interval in milliseconds (-1 to disable, default: -1)\n"
-           "  -h, --help       Show this help\n";
+           "  -w, --workers    Number of worker threads/cores (default: all, or positive integer)\n  -h, --help       Show this help\n";
 }
 
 }

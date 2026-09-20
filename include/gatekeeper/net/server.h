@@ -1,13 +1,17 @@
-﻿#pragma once
+#pragma once
 
 #include "gatekeeper/core/log/logger.h"
 #include "gatekeeper/net/event_loop.h"
 #include "gatekeeper/protocol/http/http_channel.h"
 #include "gatekeeper/net/request_handler.h"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <thread>
+#include <vector>
 
 namespace gatekeeper::net
 {
@@ -19,7 +23,8 @@ public:
 
     Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(),
            int timer_interval_ms = -1, TimerCallback timer_callback = nullptr,
-           int http_port = 0, HttpHandler http_handler = nullptr);
+           int http_port = 0, HttpHandler http_handler = nullptr,
+           std::size_t num_workers = 0);
     ~Server();
 
     Server(const Server&) = delete;
@@ -33,20 +38,19 @@ public:
     void Stop();
 
 private:
+    void RunWorkerLoop(int worker_id, EventLoop& loop, int server_fd, int http_fd);
+    int CreateListeningSocket(int port);
+
     int port_;
-    int server_fd_;
     RequestHandler handler_;
     std::shared_ptr<log::Logger> logger_;
     int timer_interval_ms_{-1};
-    TimerCallback timer_callback_;
+    TimerCallback timer_callback_{nullptr};
     int http_port_{0};
-    int http_server_fd_{-1};
     HttpHandler http_handler_{nullptr};
-    std::uint64_t next_session_id_{1};
-    std::unique_ptr<EventLoop> loop_;
-
-    void SetupSocket();
-    void SetupHttpSocket();
+    std::size_t num_workers_{0};
+    std::vector<std::unique_ptr<EventLoop>> loops_;
+    std::atomic<std::uint64_t> next_session_id_{1};
 };
 
 }

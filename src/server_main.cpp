@@ -74,7 +74,8 @@ int main(int argc, char* argv[])
             config.http_port,
             [&http_service](const auto& req) {
                 return http_service.Handle(req);
-            });
+            },
+            config.workers);
         server.Run();
     }
     catch (const std::exception& error)

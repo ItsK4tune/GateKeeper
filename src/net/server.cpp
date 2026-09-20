@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/net/server.h"
+#include "gatekeeper/net/server.h"
 #include "gatekeeper/net/channel.h"
 #include "gatekeeper/net/error.h"
 #include "gatekeeper/protocol/http/http_channel.h"
@@ -44,16 +44,16 @@ void ConfigureClientSocket(int fd)
 
 Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> logger,
                int timer_interval_ms, TimerCallback timer_callback,
-               int http_port, HttpHandler http_handler)
+               int http_port, HttpHandler http_handler,
+               std::size_t num_workers)
     : port_(port),
-      server_fd_(-1),
       handler_(std::move(handler)),
       logger_(std::move(logger)),
       timer_interval_ms_(timer_interval_ms),
       timer_callback_(std::move(timer_callback)),
       http_port_(http_port),
-      http_server_fd_(-1),
-      http_handler_(std::move(http_handler))
+      http_handler_(std::move(http_handler)),
+      num_workers_(num_workers)
 {
     if (!logger_)
     {
@@ -85,25 +85,15 @@ Server::Server(int port, RequestHandler handler, std::shared_ptr<log::Logger> lo
 Server::~Server()
 {
     Stop();
-    if (server_fd_ != -1)
-    {
-        logger_->Info("Closing server listening socket fd=" + std::to_string(server_fd_));
-        close(server_fd_);
-    }
-    if (http_server_fd_ != -1)
-    {
-        logger_->Info("Closing HTTP server listening socket fd=" + std::to_string(http_server_fd_));
-        close(http_server_fd_);
-    }
 }
 
 void Server::SetTimerCallback(int interval_ms, TimerCallback timer_callback)
 {
     timer_interval_ms_ = interval_ms;
     timer_callback_ = std::move(timer_callback);
-    if (loop_)
+    if (!loops_.empty() && loops_[0])
     {
-        loop_->SetPeriodicTimer(timer_interval_ms_, timer_callback_);
+        loops_[0]->SetPeriodicTimer(timer_interval_ms_, timer_callback_);
     }
 }
 
@@ -115,33 +105,63 @@ void Server::SetHttpHandler(int http_port, HttpHandler http_handler)
 
 void Server::Stop()
 {
-    if (loop_)
+    for (auto& l : loops_)
     {
-        loop_->Stop();
+        if (l)
+        {
+            l->Stop();
+        }
     }
 }
 
-void Server::Run()
+int Server::CreateListeningSocket(int port)
 {
-    SetupSocket();
-    if (http_port_ > 0 && http_handler_)
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == -1)
     {
-        SetupHttpSocket();
+        throw std::runtime_error("socket creation failed: " + DescribeError("socket", "0.0.0.0:" + std::to_string(port), errno));
     }
-    loop_ = std::make_unique<EventLoop>();
-    if (timer_interval_ms_ >= 0 && timer_callback_)
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+
+    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1)
     {
-        loop_->SetPeriodicTimer(timer_interval_ms_, timer_callback_);
+        const auto err = errno;
+        close(fd);
+        throw std::runtime_error(DescribeError("bind", "0.0.0.0:" + std::to_string(port), err));
     }
+    if (listen(fd, 65535) == -1)
+    {
+        const auto err = errno;
+        close(fd);
+        throw std::runtime_error(DescribeError("listen", "0.0.0.0:" + std::to_string(port), err));
+    }
+    SetNonBlocking(fd);
+    return fd;
+}
+
+void Server::RunWorkerLoop(int worker_id, EventLoop& loop, int server_fd, int http_fd)
+{
+    if (worker_id == 0 && timer_interval_ms_ >= 0 && timer_callback_)
+    {
+        loop.SetPeriodicTimer(timer_interval_ms_, timer_callback_);
+    }
+
     std::unordered_map<int, std::unique_ptr<Channel>> channels;
     std::unordered_map<int, std::unique_ptr<HttpChannel>> http_channels;
 
-    loop_->Add(server_fd_, EPOLLIN, [this, &channels](std::uint32_t) {
+    loop.Add(server_fd, EPOLLIN, [this, &loop, &channels, server_fd, worker_id](std::uint32_t) {
         while (true)
         {
             sockaddr_in client_addr{};
             socklen_t client_len = sizeof(client_addr);
-            const int client_fd = accept(server_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+            const int client_fd = accept(server_fd, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
             if (client_fd == -1)
             {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -159,12 +179,12 @@ void Server::Run()
             inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
             const auto client_info = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
             const auto session_id = next_session_id_++;
-            logger_->Info("Accepted connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
+            logger_->Info("[Worker " + std::to_string(worker_id) + "] Accepted connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
 
-            auto channel = std::make_unique<Channel>(client_fd, *loop_, handler_, logger_, session_id, client_info);
+            auto channel = std::make_unique<Channel>(client_fd, loop, handler_, logger_, session_id, client_info);
             channels.emplace(client_fd, std::move(channel));
 
-            loop_->Add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLERR, [&channels, client_fd](std::uint32_t ev) {
+            loop.Add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLERR, [&channels, client_fd](std::uint32_t ev) {
                 auto it = channels.find(client_fd);
                 if (it != channels.end())
                 {
@@ -178,14 +198,14 @@ void Server::Run()
         }
     });
 
-    if (http_server_fd_ != -1)
+    if (http_fd != -1)
     {
-        loop_->Add(http_server_fd_, EPOLLIN, [this, &http_channels](std::uint32_t) {
+        loop.Add(http_fd, EPOLLIN, [this, &loop, &http_channels, http_fd, worker_id](std::uint32_t) {
             while (true)
             {
                 sockaddr_in client_addr{};
                 socklen_t client_len = sizeof(client_addr);
-                const int client_fd = accept(http_server_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+                const int client_fd = accept(http_fd, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
                 if (client_fd == -1)
                 {
                     if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -202,12 +222,12 @@ void Server::Run()
                 char ip_str[INET_ADDRSTRLEN] = "unknown";
                 inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
                 const auto client_info = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
-                logger_->Info("Accepted HTTP connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
+                logger_->Info("[Worker " + std::to_string(worker_id) + "] Accepted HTTP connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
 
-                auto channel = std::make_unique<HttpChannel>(client_fd, *loop_, http_handler_, logger_, client_info);
+                auto channel = std::make_unique<HttpChannel>(client_fd, loop, http_handler_, logger_, client_info);
                 http_channels.emplace(client_fd, std::move(channel));
 
-                loop_->Add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLERR, [&http_channels, client_fd](std::uint32_t ev) {
+                loop.Add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLERR, [&http_channels, client_fd](std::uint32_t ev) {
                     auto it = http_channels.find(client_fd);
                     if (it != http_channels.end())
                     {
@@ -222,73 +242,59 @@ void Server::Run()
         });
     }
 
-    loop_->Run();
+    loop.Run();
+
+    close(server_fd);
+    if (http_fd != -1)
+    {
+        close(http_fd);
+    }
 }
 
-void Server::SetupSocket()
+void Server::Run()
 {
-    server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    const auto endpoint = "0.0.0.0:" + std::to_string(port_);
-    if (server_fd_ == -1)
-    {
-        const auto error_str = DescribeError("create listening socket for", endpoint, errno);
-        logger_->Error(error_str);
-        throw std::runtime_error(error_str);
-    }
-    int reuse = 1;
-    setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    // Bind main sockets first in the calling thread so bind errors are reported immediately
+    int main_server_fd = CreateListeningSocket(port_);
+    int main_http_fd = (http_port_ > 0 && http_handler_) ? CreateListeningSocket(http_port_) : -1;
 
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port_);
-    if (bind(server_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1)
-    {
-        const auto error_str = DescribeError("bind", endpoint, errno);
-        logger_->Error(error_str);
-        throw std::runtime_error(error_str);
-    }
-    if (listen(server_fd_, 128) == -1)
-    {
-        const auto error_str = DescribeError("listen on", endpoint, errno);
-        logger_->Error(error_str);
-        throw std::runtime_error(error_str);
-    }
-    SetNonBlocking(server_fd_);
-    logger_->Info("GateKeeper server listening on " + endpoint);
-}
+    const unsigned int hw_threads = std::thread::hardware_concurrency();
+    const std::size_t worker_count = num_workers_ > 0 ? num_workers_ : std::max(1U, hw_threads);
 
-void Server::SetupHttpSocket()
-{
-    http_server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    const auto endpoint = "0.0.0.0:" + std::to_string(http_port_);
-    if (http_server_fd_ == -1)
-    {
-        const auto error_str = DescribeError("create HTTP listening socket for", endpoint, errno);
-        logger_->Error(error_str);
-        throw std::runtime_error(error_str);
-    }
-    int reuse = 1;
-    setsockopt(http_server_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    logger_->Info("Starting GateKeeper server with " + std::to_string(worker_count) + " workers (SO_REUSEPORT)");
 
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(http_port_);
-    if (bind(http_server_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1)
+    loops_.resize(worker_count);
+    for (std::size_t i = 0; i < worker_count; ++i)
     {
-        const auto error_str = DescribeError("bind HTTP", endpoint, errno);
-        logger_->Error(error_str);
-        throw std::runtime_error(error_str);
+        loops_[i] = std::make_unique<EventLoop>();
     }
-    if (listen(http_server_fd_, 128) == -1)
+
+    std::vector<std::thread> threads;
+    for (std::size_t i = 1; i < worker_count; ++i)
     {
-        const auto error_str = DescribeError("listen HTTP on", endpoint, errno);
-        logger_->Error(error_str);
-        throw std::runtime_error(error_str);
+        threads.emplace_back([this, i]() {
+            try
+            {
+                int s_fd = CreateListeningSocket(port_);
+                int h_fd = (http_port_ > 0 && http_handler_) ? CreateListeningSocket(http_port_) : -1;
+                RunWorkerLoop(static_cast<int>(i), *loops_[i], s_fd, h_fd);
+            }
+            catch (const std::exception& e)
+            {
+                logger_->Error("Worker " + std::to_string(i) + " exception: " + e.what());
+            }
+        });
     }
-    SetNonBlocking(http_server_fd_);
-    logger_->Info("GateKeeper HTTP API server listening on " + endpoint);
+
+    // Run worker 0 on the calling thread
+    RunWorkerLoop(0, *loops_[0], main_server_fd, main_http_fd);
+
+    for (auto& t : threads)
+    {
+        if (t.joinable())
+        {
+            t.join();
+        }
+    }
 }
 
 }
