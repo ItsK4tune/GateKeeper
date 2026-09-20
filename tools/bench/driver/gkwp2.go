@@ -36,22 +36,45 @@ type GKWP2Session struct {
 }
 
 func (s *GKWP2Session) Execute(ctx context.Context, req RequestConfig) error {
-	var payloadStr string
+	var payload []byte
 	switch req.Op {
 	case OpPing:
-		payloadStr = `{"op":"PING"}`
-	case OpRateLimit:
-		payloadStr = fmt.Sprintf(`{"op":"GK.RATE_LIMIT","key":"%s","limit":%d,"window_ms":%d,"cost":%d}`,
-			req.Key, req.Limit, req.WindowMs, req.Cost)
-	case OpSet:
-		payloadStr = fmt.Sprintf(`{"op":"SET","key":"%s","value":"%s"}`, req.Key, req.Value)
+		payload = make([]byte, 2)
+		binary.BigEndian.PutUint16(payload[0:2], 0x0001)
 	case OpGet:
-		payloadStr = fmt.Sprintf(`{"op":"GET","key":"%s"}`, req.Key)
+		k := []byte(req.Key)
+		payload = make([]byte, 2+2+len(k))
+		binary.BigEndian.PutUint16(payload[0:2], 0x0011)
+		binary.BigEndian.PutUint16(payload[2:4], uint16(len(k)))
+		copy(payload[4:], k)
+	case OpSet:
+		k := []byte(req.Key)
+		v := []byte(req.Value)
+		payload = make([]byte, 2+2+len(k)+4+len(v)+8+1)
+		binary.BigEndian.PutUint16(payload[0:2], 0x0010)
+		binary.BigEndian.PutUint16(payload[2:4], uint16(len(k)))
+		copy(payload[4:], k)
+		offset := 4 + len(k)
+		binary.BigEndian.PutUint32(payload[offset:offset+4], uint32(len(v)))
+		copy(payload[offset+4:], v)
+		offset += 4 + len(v)
+		binary.BigEndian.PutUint64(payload[offset:offset+8], 0) // ttl_ms = 0
+		offset += 8
+		payload[offset] = 0 // cond = Always
+	case OpRateLimit:
+		k := []byte(req.Key)
+		payload = make([]byte, 2+2+len(k)+8+8+4)
+		binary.BigEndian.PutUint16(payload[0:2], 0x0100)
+		binary.BigEndian.PutUint16(payload[2:4], uint16(len(k)))
+		copy(payload[4:], k)
+		offset := 4 + len(k)
+		binary.BigEndian.PutUint64(payload[offset:offset+8], req.Limit)
+		binary.BigEndian.PutUint64(payload[offset+8:offset+16], req.WindowMs)
+		binary.BigEndian.PutUint32(payload[offset+16:offset+20], uint32(req.Cost))
 	default:
 		return fmt.Errorf("unsupported op: %s", req.Op)
 	}
 
-	payload := []byte(payloadStr)
 	frame := make([]byte, 24+len(payload))
 
 	reqID := atomic.AddUint64(&s.reqSeq, 1)
