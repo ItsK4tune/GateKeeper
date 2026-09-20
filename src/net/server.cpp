@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdexcept>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -27,6 +28,16 @@ void SetNonBlocking(int fd)
     {
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     }
+}
+
+void ConfigureClientSocket(int fd)
+{
+    SetNonBlocking(fd);
+    int enable_nodelay = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &enable_nodelay, sizeof(enable_nodelay));
+    int buf_size = 128 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
 }
 
 }
@@ -143,7 +154,7 @@ void Server::Run()
                 }
                 break;
             }
-            SetNonBlocking(client_fd);
+            ConfigureClientSocket(client_fd);
             char ip_str[INET_ADDRSTRLEN] = "unknown";
             inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
             const auto client_info = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
@@ -187,7 +198,7 @@ void Server::Run()
                     }
                     break;
                 }
-                SetNonBlocking(client_fd);
+                ConfigureClientSocket(client_fd);
                 char ip_str[INET_ADDRSTRLEN] = "unknown";
                 inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
                 const auto client_info = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
