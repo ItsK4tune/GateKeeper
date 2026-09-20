@@ -181,7 +181,7 @@ void Server::RunWorkerLoop(int worker_id, EventLoop& loop, int server_fd, int ht
             const auto session_id = next_session_id_++;
             logger_->Info("[Worker " + std::to_string(worker_id) + "] Accepted connection from " + client_info + " (fd=" + std::to_string(client_fd) + ")");
 
-            auto channel = std::make_unique<Channel>(client_fd, loop, handler_, logger_, session_id, client_info);
+            auto channel = std::make_unique<Channel>(client_fd, loop, handler_, logger_, session_id, client_info, on_disconnect_, session_handler_);
             channels.emplace(client_fd, std::move(channel));
 
             loop.Add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLERR, [&channels, client_fd](std::uint32_t ev) {

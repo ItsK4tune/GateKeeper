@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -20,7 +21,10 @@ class Channel
 public:
     static constexpr std::size_t kMaxWriteBufferSize = 64 * 1024 * 1024;
 
-    Channel(int fd, EventLoop& loop, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(), std::uint64_t session_id = 0, std::string address = "");
+    using DisconnectCallback = std::function<void(std::uint64_t session_id)>;
+    using SessionRequestHandler = std::function<std::string(std::string_view payload, std::uint64_t session_id)>;
+
+    Channel(int fd, EventLoop& loop, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(), std::uint64_t session_id = 0, std::string address = "", DisconnectCallback on_disconnect = nullptr, SessionRequestHandler session_handler = nullptr);
     ~Channel();
 
     Channel(const Channel&) = delete;
@@ -45,6 +49,8 @@ private:
     std::vector<std::uint8_t> write_buffer_;
     std::size_t write_offset_{0};
     bool closed_{false};
+    DisconnectCallback on_disconnect_{nullptr};
+    SessionRequestHandler session_handler_{nullptr};
 };
 
 }

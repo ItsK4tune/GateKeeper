@@ -26,6 +26,7 @@ struct StorageShard
     HashTable<std::string, Reservation> reservations;
     HashTable<std::string, IdempotencyRecord> idempotency_records;
     HashTable<std::string, LockRecord> locks;
+    std::unordered_map<std::uint64_t, std::vector<std::string>> session_locks;
 };
 
 class MemoryStore final : public Store
@@ -65,6 +66,7 @@ public:
     LockReleaseResult LockRelease(std::string_view resource, std::string_view owner_token) override;
     LockExtendResult LockExtend(std::string_view resource, std::string_view owner_token, std::uint64_t ttl_ms) override;
     std::optional<LockRecord> LockGet(std::string_view resource) const override;
+    std::vector<std::string> ReleaseSessionLocks(std::uint64_t session_id) override;
 
 private:
     StorageShard& GetShard(std::string_view key) const noexcept;

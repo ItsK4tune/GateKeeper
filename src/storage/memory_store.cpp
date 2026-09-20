@@ -980,7 +980,20 @@ LockAcquireResult MemoryStore::LockAcquire(
     auto* existing = shard.locks.Find(res_str);
     if (existing != nullptr && existing->IsExpired(now))
     {
-        shard.locks.Erase(res_str);
+        if (existing->is_ephemeral && existing->session_id > 0)
+    {
+        auto sit = shard.session_locks.find(existing->session_id);
+        if (sit != shard.session_locks.end())
+        {
+            auto& list = sit->second;
+            list.erase(std::remove(list.begin(), list.end(), res_str), list.end());
+            if (list.empty())
+            {
+                shard.session_locks.erase(sit);
+            }
+        }
+    }
+    shard.locks.Erase(res_str);
         existing = nullptr;
     }
 
@@ -1005,6 +1018,10 @@ LockAcquireResult MemoryStore::LockAcquire(
     rec.session_id = session_id;
     rec.is_ephemeral = is_ephemeral;
 
+    if (is_ephemeral && session_id > 0)
+    {
+        shard.session_locks[session_id].push_back(res_str);
+    }
     shard.locks.Insert(res_str, std::move(rec));
     return {true, true, res_str, token, fencing, ttl_ms, {}, {}};
 }
@@ -1032,7 +1049,20 @@ LockReleaseResult MemoryStore::LockRelease(
     {
         if (existing != nullptr)
         {
-            shard.locks.Erase(res_str);
+            if (existing->is_ephemeral && existing->session_id > 0)
+    {
+        auto sit = shard.session_locks.find(existing->session_id);
+        if (sit != shard.session_locks.end())
+        {
+            auto& list = sit->second;
+            list.erase(std::remove(list.begin(), list.end(), res_str), list.end());
+            if (list.empty())
+            {
+                shard.session_locks.erase(sit);
+            }
+        }
+    }
+    shard.locks.Erase(res_str);
         }
         return {false, false, "LOCK_NOT_FOUND", "Lock does not exist or has expired"};
     }
@@ -1042,6 +1072,19 @@ LockReleaseResult MemoryStore::LockRelease(
         return {false, false, "ERR_LOCK_TOKEN_MISMATCH", "Owner token mismatch"};
     }
 
+    if (existing->is_ephemeral && existing->session_id > 0)
+    {
+        auto sit = shard.session_locks.find(existing->session_id);
+        if (sit != shard.session_locks.end())
+        {
+            auto& list = sit->second;
+            list.erase(std::remove(list.begin(), list.end(), res_str), list.end());
+            if (list.empty())
+            {
+                shard.session_locks.erase(sit);
+            }
+        }
+    }
     shard.locks.Erase(res_str);
     return {true, true, {}, {}};
 }
@@ -1074,7 +1117,20 @@ LockExtendResult MemoryStore::LockExtend(
     {
         if (existing != nullptr)
         {
-            shard.locks.Erase(res_str);
+            if (existing->is_ephemeral && existing->session_id > 0)
+    {
+        auto sit = shard.session_locks.find(existing->session_id);
+        if (sit != shard.session_locks.end())
+        {
+            auto& list = sit->second;
+            list.erase(std::remove(list.begin(), list.end(), res_str), list.end());
+            if (list.empty())
+            {
+                shard.session_locks.erase(sit);
+            }
+        }
+    }
+    shard.locks.Erase(res_str);
         }
         return {false, false, 0, "LOCK_NOT_FOUND", "Lock does not exist or has expired"};
     }
@@ -1101,6 +1157,38 @@ std::optional<LockRecord> MemoryStore::LockGet(std::string_view resource) const
         return std::nullopt;
     }
     return *existing;
+}
+
+
+std::vector<std::string> MemoryStore::ReleaseSessionLocks(std::uint64_t session_id)
+{
+    if (session_id == 0)
+    {
+        return {};
+    }
+
+    std::vector<std::string> released;
+    for (auto& shard : shards_)
+    {
+        const std::lock_guard lock(shard.mutex);
+        auto it = shard.session_locks.find(session_id);
+        if (it == shard.session_locks.end())
+        {
+            continue;
+        }
+
+        for (const auto& res : it->second)
+        {
+            auto* existing = shard.locks.Find(res);
+            if (existing != nullptr && existing->session_id == session_id)
+            {
+                shard.locks.Erase(res);
+                released.push_back(res);
+            }
+        }
+        shard.session_locks.erase(it);
+    }
+    return released;
 }
 
 }

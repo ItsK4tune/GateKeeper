@@ -101,11 +101,37 @@ void TestLockExtend()
 
 }
 
+
+void TestEphemeralLocks()
+{
+    MemoryStore store;
+
+    // Session 100 acquires ephemeral lock on res:ephem:1 and res:ephem:2
+    auto a1 = store.LockAcquire("res:ephem:1", 60000, "tok1", 100, true);
+    Require(a1.ok && a1.acquired, "a1 acquired");
+
+    auto a2 = store.LockAcquire("res:ephem:2", 60000, "tok2", 100, true);
+    Require(a2.ok && a2.acquired, "a2 acquired");
+
+    // Session 200 tries to acquire -> blocked
+    auto b1 = store.LockAcquire("res:ephem:1", 60000, "tok3", 200, true);
+    Require(b1.ok && !b1.acquired, "b1 blocked");
+
+    // Session 100 crashes/disconnects -> ReleaseSessionLocks(100)
+    auto released = store.ReleaseSessionLocks(100);
+    Require(released.size() == 2, "2 locks released for session 100");
+
+    // Session 200 can now immediately acquire!
+    auto b2 = store.LockAcquire("res:ephem:1", 60000, "tok3", 200, true);
+    Require(b2.ok && b2.acquired, "b2 now acquired immediately without waiting 60s TTL");
+}
+
 int main()
 {
     TestDirectStorageLockAcquireRelease();
     TestLockExpirationAndPurge();
     TestLockExtend();
+    TestEphemeralLocks();
     std::cout << "All lock state tests passed!\n";
     return 0;
 }

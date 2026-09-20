@@ -19,6 +19,7 @@ Result LockAcquire(const protocol::Request& request, storage::Store& store)
     std::uint64_t ttl_ms = 30000;
     std::string owner_token;
     bool ephemeral = false;
+    std::uint64_t session_id = 0;
 
     JsonReader reader(request.body_json);
     reader.Expect('{');
@@ -42,6 +43,10 @@ Result LockAcquire(const protocol::Request& request, storage::Store& store)
         {
             owner_token = reader.String();
         }
+        else if (field == "session_id")
+        {
+            session_id = reader.UnsignedNumber();
+        }
         else if (field == "ephemeral")
         {
             ephemeral = reader.Boolean();
@@ -63,7 +68,7 @@ Result LockAcquire(const protocol::Request& request, storage::Store& store)
         throw std::invalid_argument("resource must not be empty");
     }
 
-    auto result = store.LockAcquire(resource, ttl_ms, owner_token, 0, ephemeral);
+    auto result = store.LockAcquire(resource, ttl_ms, owner_token, session_id, ephemeral);
     if (!result.ok)
     {
         return Result{false, {}, {result.error_code, result.error_message}};

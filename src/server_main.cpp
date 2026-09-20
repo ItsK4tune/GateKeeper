@@ -90,6 +90,14 @@ int main(int argc, char* argv[])
             },
             config.workers);
 
+        server.SetDisconnectCallback([&dispatcher, logger](std::uint64_t session_id) {
+            auto released = dispatcher.GetStore().ReleaseSessionLocks(session_id);
+            if (!released.empty())
+            {
+                logger->Info("Auto-released " + std::to_string(released.size()) + " ephemeral locks for disconnected session " + std::to_string(session_id));
+            }
+        });
+
         g_server.store(&server);
         struct sigaction sa{};
         sa.sa_handler = HandleSignal;

@@ -57,6 +57,7 @@ public:
     virtual LockReleaseResult LockRelease(std::string_view resource, std::string_view owner_token) = 0;
     virtual LockExtendResult LockExtend(std::string_view resource, std::string_view owner_token, std::uint64_t ttl_ms) = 0;
     virtual std::optional<LockRecord> LockGet(std::string_view resource) const = 0;
+    virtual std::vector<std::string> ReleaseSessionLocks(std::uint64_t session_id) = 0;
 };
 
 }
