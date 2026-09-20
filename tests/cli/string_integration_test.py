@@ -31,19 +31,22 @@ try:
                 assert part
                 data += part
             return data
-        def request(body):
-            packet = json.dumps({"id": 'id"quoted', "op": "SET", "body": body}).encode()
-            header = struct.pack(">HBBBBBBQII", 0x474B, 2, 8, 1, 0, 0, 0, 1, 1, len(packet))
-            wire.sendall(header + packet)
+        def request_set(key, value, cond=0, ttl_ms=0):
+            k_bytes = key.encode("utf-8")
+            v_bytes = value.encode("utf-8")
+            body = (struct.pack(">HH", 0x0010, len(k_bytes)) + k_bytes +
+                    struct.pack(">I", len(v_bytes)) + v_bytes +
+                    struct.pack(">BQ", cond, ttl_ms))
+            header = struct.pack(">HBBBBBBQII", 0x474B, 2, 0, 1, 0, 0, 0, 1, 1, len(body))
+            wire.sendall(header + body)
             resp_hdr = read_exact(24)
             magic, ver, flags, msg_type, _, _, _, req_id, stream_id, length = struct.unpack(">HBBBBBBQII", resp_hdr)
             assert magic == 0x474B
-            return json.loads(read_exact(length))
-        result = request({"key": "unicode", "value": 'Vi???t ???? " \\ \n'})
-        assert result["ok"] and result["id"] == 'id"quoted'
-        result = request({"key": "unicode", "value": "bad", 'unexpected"field': True})
-        assert not result["ok"] and result["error"]["code"] == "INVALID_ARGUMENTS"
-    assert run("GET unicode") == json.dumps('Vi???t ???? " \\ \n')
+            resp_body = read_exact(length)
+            return resp_body[0] # BinaryStatus: 0 = Ok, 4 = Conflict, 1 = Error
+        status = request_set("unicode", 'Việt Nam " \\ \n')
+        assert status == 0
+    assert run("GET unicode") == json.dumps('Việt Nam " \\ \n', ensure_ascii=False)
     assert run("GET name") == '"duong"'
     assert run("SET name other NX") == "(nil)"
     assert run("GET name") == '"duong"'

@@ -1,4 +1,3 @@
-import json
 import socket
 import struct
 import subprocess
@@ -37,9 +36,11 @@ def round_trip(executable, repl):
                 hdr = read_all(connection, 24)
                 magic, ver, flags, msg_type, _, _, _, req_id, stream_id, length = struct.unpack(">HBBBBBBQII", hdr)
                 require(magic == 0x474B, "invalid GKWP/2 magic")
-                requests.append(json.loads(read_all(connection, length)))
-                payload = json.dumps({"id": "gate-1", "ok": True, "result": {"pong": True}}).encode()
-                resp_hdr = struct.pack(">HBBBBBBQII", 0x474B, 2, 8, 2, 0, 0, 0, req_id, stream_id, len(payload))
+                body = read_all(connection, length)
+                opcode = struct.unpack(">H", body[:2])[0]
+                requests.append(opcode)
+                payload = b"PONG"
+                resp_hdr = struct.pack(">HBBBBBBQII", 0x474B, 2, 0, 2, 0, 0, 0, req_id, stream_id, len(payload))
                 packet = resp_hdr + payload
                 for byte in packet:
                     connection.sendall(bytes([byte]))
@@ -62,7 +63,7 @@ def round_trip(executable, repl):
         listener.close()
     require(not worker.is_alive(), "server thread stuck")
     require(not failures, str(failures))
-    require(requests == [{"id": "gate-1", "op": "PING", "body": {}}], "unexpected requests")
+    require(requests == [0x0001], "unexpected requests")
 
 
 executable = sys.argv[1]

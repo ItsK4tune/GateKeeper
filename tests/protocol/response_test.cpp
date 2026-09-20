@@ -16,14 +16,12 @@ void TestErrorResponseUsesTheProtocolErrorShape()
 
 }
 
-void RunFrameDecoderTests();
 void RunJsonRequestParserTests();
 void RunCommandDispatcherTests();
 void RunCliCommandTests();
 
 int main()
 {
-    RunFrameDecoderTests();
     RunJsonRequestParserTests();
     RunCommandDispatcherTests();
     RunCliCommandTests();

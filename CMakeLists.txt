@@ -29,8 +29,6 @@ gatekeeper_library(gk_command_names
 )
 
 gatekeeper_library(gk_protocol
-    src/protocol/gkwp1/frame.cpp
-    src/protocol/gkwp1/decoder.cpp
     src/protocol/json_parser.cpp
     src/protocol/response.cpp
     src/protocol/json_reader.cpp
@@ -151,7 +149,6 @@ if(BUILD_TESTING)
     add_test(NAME options_tests COMMAND options_tests)
 
     add_executable(protocol_tests
-        tests/protocol/gkwp1/frame_decoder_test.cpp
         tests/protocol/json_request_parser_test.cpp
         tests/protocol/response_test.cpp
         tests/command/command_dispatcher_test.cpp

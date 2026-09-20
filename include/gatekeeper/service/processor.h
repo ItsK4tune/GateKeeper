@@ -1,15 +1,13 @@
 #pragma once
 
-#include "gatekeeper/command/result.h"
 #include "gatekeeper/core/log/logger.h"
-#include "gatekeeper/protocol/request.h"
+#include "gatekeeper/protocol/gkwp2/binary_codec.h"
+#include "gatekeeper/storage/aof/aof_writer.h"
+#include "gatekeeper/storage/store.h"
 
-#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
-
-namespace gatekeeper::storage { class Store; }
 
 namespace gatekeeper::service
 {
@@ -17,17 +15,16 @@ namespace gatekeeper::service
 class Processor
 {
 public:
-    using Dispatch = std::function<command::Result(const protocol::Request&)>;
+    explicit Processor(storage::Store* store,
+                       std::shared_ptr<log::Logger> logger = log::Logger::Null(),
+                       std::shared_ptr<storage::aof::AofWriter> aof_writer = nullptr);
 
-    explicit Processor(Dispatch dispatch, std::shared_ptr<log::Logger> logger = log::Logger::Null(), storage::Store* store = nullptr);
     std::string Process(std::string_view payload) const;
 
 private:
-    std::string ProcessBinary(std::string_view payload) const;
-
-    Dispatch dispatch_;
-    std::shared_ptr<log::Logger> logger_;
     storage::Store* store_{nullptr};
+    std::shared_ptr<log::Logger> logger_;
+    std::shared_ptr<storage::aof::AofWriter> aof_writer_;
 };
 
 }

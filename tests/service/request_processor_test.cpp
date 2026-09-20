@@ -1,5 +1,6 @@
 #include "gatekeeper/service/processor.h"
-#include "gatekeeper/command/dispatcher.h"
+#include "gatekeeper/storage/memory_store.h"
+#include "gatekeeper/protocol/gkwp2/binary_codec.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -21,36 +22,42 @@ int main()
 {
     try
     {
-        gatekeeper::command::Dispatcher dispatcher;
-        int calls = 0;
-        dispatcher.Register("CUSTOM", [&calls](const auto& request) {
-            ++calls;
-            Require(request.body_json == R"({"key":"Value"})", "dispatcher modified body");
-            return gatekeeper::command::Result{true, R"({"custom":true})", {}};
-        });
-        gatekeeper::service::Processor processor([&dispatcher](const auto& request) {
-            return dispatcher.Dispatch(request);
-        });
-        Require(processor.Process(R"({"id":"1","op":"cUsToM","body":{"key":"Value"}})") ==
-                R"({"id":"1","ok":true,"result":{"custom":true}})", "custom handler not used");
-        Require(calls == 1, "wrong dispatch count");
-        Require(processor.Process(R"({"id":"2","op":"PING","body":{}})") ==
-                R"({"id":"2","ok":true,"result":{"pong":true}})", "PING changed");
-        Require(processor.Process(R"({"id":"3","op":"CUSTOM","body":[]})").find("INVALID_REQUEST") !=
-                std::string::npos && calls == 1, "invalid request reached handler");
-        Require(processor.Process(R"({"id":"4","op":"unknown","body":{}})").find("UNKNOWN_COMMAND") !=
-                std::string::npos, "unknown command accepted");
-        bool duplicate_rejected = false;
-        try
-        {
-            dispatcher.Register("ping", [](const auto&) { return gatekeeper::command::Result{}; });
-        }
-        catch (const std::invalid_argument&)
-        {
-            duplicate_rejected = true;
-        }
-        Require(duplicate_rejected, "duplicate registration accepted");
-        std::cout << "Request processor and dispatcher extension tests passed\n";
+        gatekeeper::storage::MemoryStore store;
+        gatekeeper::service::Processor processor(&store);
+
+        // 1. Test Ping
+        const auto ping_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodePing();
+        const auto ping_resp = processor.Process(ping_req);
+        Require(!ping_resp.empty() && ping_resp[0] == 0, "Ping failed");
+        Require(ping_resp.substr(3) == "PONG", "Ping not PONG");
+
+        // 2. Test Set & Get
+        const auto set_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeSet("foo", "bar");
+        const auto set_resp = processor.Process(set_req);
+        Require(!set_resp.empty() && set_resp[0] == 0, "Set failed");
+
+        const auto get_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeGet("foo");
+        const auto get_resp = processor.Process(get_req);
+        Require(!get_resp.empty() && get_resp[0] == 0, "Get failed");
+        Require(get_resp.substr(5) == "bar", "Get value mismatch");
+
+        // 3. Test Rate Limit
+        const auto rl_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeRateLimit("user:1", 10, 60000, 1);
+        const auto rl_resp = processor.Process(rl_req);
+        Require(!rl_resp.empty() && rl_resp[0] == 0, "RateLimit failed");
+        Require(rl_resp[1] == 1, "RateLimit not allowed");
+
+        // 4. Test Del
+        const auto del_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeDel("foo");
+        const auto del_resp = processor.Process(del_req);
+        Require(!del_resp.empty() && del_resp[0] == 0, "Del failed");
+        Require(del_resp[1] == 1, "Del not 1");
+
+        // 5. Test Get after Del (NotFound)
+        const auto get2_resp = processor.Process(get_req);
+        Require(!get2_resp.empty() && get2_resp[0] == static_cast<char>(gatekeeper::protocol::gkwp2::BinaryStatus::NotFound), "Get not NotFound");
+
+        std::cout << "Binary request processor tests passed\n";
     }
     catch (const std::exception& error)
     {

@@ -48,9 +48,7 @@ int main(int argc, char* argv[])
             dispatcher.SetAofWriter(aof_writer);
         }
 
-        gatekeeper::service::Processor processor([&dispatcher](const auto& request) {
-            return dispatcher.Dispatch(request);
-        }, logger, &dispatcher.GetStore());
+        gatekeeper::service::Processor processor(&dispatcher.GetStore(), logger, aof_writer);
         gatekeeper::service::HttpService http_service(dispatcher.GetStore(), logger, aof_writer);
 
         gatekeeper::net::Server server(

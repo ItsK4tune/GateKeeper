@@ -1,8 +1,5 @@
 #include "gatekeeper/service/processor.h"
-#include "gatekeeper/protocol/json_parser.h"
-#include "gatekeeper/protocol/response.h"
 #include "gatekeeper/protocol/gkwp2/binary_codec.h"
-#include "gatekeeper/storage/store.h"
 
 #include <arpa/inet.h>
 #include <cstring>
@@ -13,22 +10,24 @@
 namespace gatekeeper::service
 {
 
-Processor::Processor(Dispatch dispatch, std::shared_ptr<log::Logger> logger, storage::Store* store)
-    : dispatch_(std::move(dispatch)), logger_(std::move(logger)), store_(store)
+Processor::Processor(storage::Store* store,
+                     std::shared_ptr<log::Logger> logger,
+                     std::shared_ptr<storage::aof::AofWriter> aof_writer)
+    : store_(store), logger_(std::move(logger)), aof_writer_(std::move(aof_writer))
 {
     if (!logger_)
     {
         logger_ = log::Logger::Null();
     }
-    if (!dispatch_)
+    if (!store_)
     {
-        throw std::invalid_argument("request dispatcher is required");
+        throw std::invalid_argument("storage store is required");
     }
 }
 
-std::string Processor::ProcessBinary(std::string_view payload) const
+std::string Processor::Process(std::string_view payload) const
 {
-    if (payload.size() < 2 || !store_)
+    if (payload.size() < 2)
     {
         return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
     }
@@ -40,6 +39,15 @@ std::string Processor::ProcessBinary(std::string_view payload) const
 
     switch (opcode)
     {
+    case protocol::gkwp2::BinaryOpcode::Ping:
+    {
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        std::uint16_t len = htons(4);
+        resp.append(reinterpret_cast<const char*>(&len), 2);
+        resp.append("PONG");
+        return resp;
+    }
     case protocol::gkwp2::BinaryOpcode::Get:
     {
         if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
@@ -97,7 +105,151 @@ std::string Processor::ProcessBinary(std::string_view payload) const
         {
             return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::NotFound));
         }
+        if (aof_writer_)
+        {
+            std::string aof = "{\"key\":\"" + std::string(key) + "\",\"value\":\"" + std::string(val) + "\"";
+            if (ttl_ms > 0) aof += ",\"ttl_ms\":" + std::to_string(ttl_ms);
+            if (cond == storage::WriteCondition::IfAbsent) aof += ",\"if_not_exists\":true";
+            else if (cond == storage::WriteCondition::IfPresent) aof += ",\"if_exists\":true";
+            aof += "}";
+            aof_writer_->Append("SET", aof);
+        }
         return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+    }
+    case protocol::gkwp2::BinaryOpcode::Del:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+
+        const bool deleted = store_->Del(key);
+        if (deleted && aof_writer_)
+        {
+            aof_writer_->Append("DEL", "{\"key\":\"" + std::string(key) + "\"}");
+        }
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(deleted ? 1 : 0);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Exists:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+
+        const bool exists = store_->Exists(key);
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(exists ? 1 : 0);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Type:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+
+        const auto type = store_->Type(key);
+        std::string type_name = "none";
+        if (type == storage::DataType::String) type_name = "string";
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        std::uint16_t tlen = htons(static_cast<std::uint16_t>(type_name.size()));
+        resp.append(reinterpret_cast<const char*>(&tlen), 2);
+        resp.append(type_name);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Expire:
+    {
+        if (payload.size() < 2 + 8) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len + 8) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+        payload.remove_prefix(key_len);
+
+        std::uint64_t ttl_ms;
+        std::memcpy(&ttl_ms, payload.data(), 8);
+        ttl_ms = be64toh(ttl_ms);
+
+        const bool success = store_->Expire(key, ttl_ms);
+        if (success && aof_writer_)
+        {
+            aof_writer_->Append("PEXPIRE", "{\"key\":\"" + std::string(key) + "\",\"ttl_ms\":" + std::to_string(ttl_ms) + "}");
+        }
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(success ? 1 : 0);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Ttl:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+
+        const auto ttl_ms = store_->Ttl(key);
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        std::uint64_t ttl_net = htobe64(static_cast<std::uint64_t>(ttl_ms));
+        resp.append(reinterpret_cast<const char*>(&ttl_net), 8);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Incr:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len + 8 + 8) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+        payload.remove_prefix(key_len);
+
+        std::int64_t delta;
+        std::uint64_t init_ttl_ms;
+        std::memcpy(&delta, payload.data(), 8); delta = be64toh(delta); payload.remove_prefix(8);
+        std::memcpy(&init_ttl_ms, payload.data(), 8); init_ttl_ms = be64toh(init_ttl_ms);
+
+        const auto res = store_->IncrBy(key, delta, init_ttl_ms);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+        if (aof_writer_)
+        {
+            std::string aof = "{\"key\":\"" + std::string(key) + "\",\"delta\":" + std::to_string(delta);
+            if (init_ttl_ms > 0) aof += ",\"ttl_ms\":" + std::to_string(init_ttl_ms);
+            aof += "}";
+            aof_writer_->Append("INCRBY", aof);
+        }
+        std::string resp;
+        resp.reserve(1 + 8);
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        const std::int64_t val_net = htobe64(res.value);
+        resp.append(reinterpret_cast<const char*>(&val_net), 8);
+        return resp;
     }
     case protocol::gkwp2::BinaryOpcode::RateLimit:
     {
@@ -132,7 +284,51 @@ std::string Processor::ProcessBinary(std::string_view payload) const
         resp.append(reinterpret_cast<const char*>(&retry_net), 8);
         return resp;
     }
-    case protocol::gkwp2::BinaryOpcode::Incr:
+    case protocol::gkwp2::BinaryOpcode::QuotaInit:
+    {
+        if (payload.size() < 2 + 8) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len + 8) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+        payload.remove_prefix(key_len);
+
+        std::uint64_t amount;
+        std::memcpy(&amount, payload.data(), 8);
+        amount = be64toh(amount);
+
+        store_->Set(std::string(key), std::to_string(amount), storage::WriteCondition::Always, 0);
+        if (aof_writer_)
+        {
+            aof_writer_->Append("GK.QUOTA_INIT", "{\"key\":\"" + std::string(key) + "\",\"amount\":" + std::to_string(amount) + "}");
+        }
+        return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+    }
+    case protocol::gkwp2::BinaryOpcode::QuotaGet:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+
+        const auto val_opt = store_->Get(key);
+        std::uint64_t balance = 0;
+        if (val_opt.has_value())
+        {
+            try { balance = std::stoull(*val_opt); } catch (...) {}
+        }
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        std::uint64_t bal_net = htobe64(balance);
+        resp.append(reinterpret_cast<const char*>(&bal_net), 8);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Reserve:
     {
         if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
         std::uint16_t key_len;
@@ -143,59 +339,249 @@ std::string Processor::ProcessBinary(std::string_view payload) const
         const auto key = payload.substr(0, key_len);
         payload.remove_prefix(key_len);
 
-        std::int64_t delta;
-        std::uint64_t init_ttl_ms;
-        std::memcpy(&delta, payload.data(), 8); delta = be64toh(delta); payload.remove_prefix(8);
-        std::memcpy(&init_ttl_ms, payload.data(), 8); init_ttl_ms = be64toh(init_ttl_ms);
+        std::uint64_t amount, ttl_ms;
+        std::memcpy(&amount, payload.data(), 8); amount = be64toh(amount); payload.remove_prefix(8);
+        std::memcpy(&ttl_ms, payload.data(), 8); ttl_ms = be64toh(ttl_ms);
 
-        const auto res = store_->IncrBy(key, delta, init_ttl_ms);
+        const auto res = store_->ReserveQuota(key, amount, ttl_ms);
         if (!res.ok)
         {
             return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
         }
+
+        if (res.reserved && aof_writer_)
+        {
+            aof_writer_->Append("GK.RESERVE", "{\"key\":\"" + std::string(key) + "\",\"amount\":" + std::to_string(amount) +
+                ",\"ttl_ms\":" + std::to_string(ttl_ms) + ",\"reservation_id\":\"" + res.reservation_id + "\"}");
+        }
+
         std::string resp;
-        resp.reserve(1 + 8);
         resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
-        const std::int64_t val_net = htobe64(res.value);
-        resp.append(reinterpret_cast<const char*>(&val_net), 8);
+        resp.push_back(res.reserved ? 1 : 0);
+        std::uint64_t rem_net = htobe64(res.remaining);
+        resp.append(reinterpret_cast<const char*>(&rem_net), 8);
+        std::uint16_t rlen = htons(static_cast<std::uint16_t>(res.reservation_id.size()));
+        resp.append(reinterpret_cast<const char*>(&rlen), 2);
+        resp.append(res.reservation_id);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Commit:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+        payload.remove_prefix(key_len);
+
+        std::uint16_t rlen;
+        std::memcpy(&rlen, payload.data(), 2); rlen = ntohs(rlen); payload.remove_prefix(2);
+        if (payload.size() < rlen + 8) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto res_id = payload.substr(0, rlen);
+        payload.remove_prefix(rlen);
+
+        std::uint64_t actual_amount;
+        std::memcpy(&actual_amount, payload.data(), 8); actual_amount = be64toh(actual_amount);
+
+        const auto res = store_->CommitQuota(key, res_id, actual_amount);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_)
+        {
+            aof_writer_->Append("GK.COMMIT", "{\"key\":\"" + std::string(key) + "\",\"reservation_id\":\"" + std::string(res_id) +
+                "\",\"actual_amount\":" + std::to_string(actual_amount) + "}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(res.committed ? 1 : 0);
+        std::uint64_t ref_net = htobe64(res.refunded);
+        resp.append(reinterpret_cast<const char*>(&ref_net), 8);
+        std::uint64_t bal_net = htobe64(res.remaining);
+        resp.append(reinterpret_cast<const char*>(&bal_net), 8);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::Rollback:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2);
+        key_len = ntohs(key_len);
+        payload.remove_prefix(2);
+        if (payload.size() < key_len + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len);
+        payload.remove_prefix(key_len);
+
+        std::uint16_t rlen;
+        std::memcpy(&rlen, payload.data(), 2); rlen = ntohs(rlen); payload.remove_prefix(2);
+        if (payload.size() < rlen) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto res_id = payload.substr(0, rlen);
+
+        const auto res = store_->RollbackQuota(key, res_id);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_)
+        {
+            aof_writer_->Append("GK.ROLLBACK", "{\"key\":\"" + std::string(key) + "\",\"reservation_id\":\"" + std::string(res_id) + "\"}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(res.rolled_back ? 1 : 0);
+        std::uint64_t ref_net = htobe64(res.refunded);
+        resp.append(reinterpret_cast<const char*>(&ref_net), 8);
+        std::uint64_t bal_net = htobe64(res.remaining);
+        resp.append(reinterpret_cast<const char*>(&bal_net), 8);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::IdemBegin:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2); key_len = ntohs(key_len); payload.remove_prefix(2);
+        if (payload.size() < key_len + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len); payload.remove_prefix(key_len);
+
+        std::uint16_t hlen;
+        std::memcpy(&hlen, payload.data(), 2); hlen = ntohs(hlen); payload.remove_prefix(2);
+        if (payload.size() < hlen + 8 + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto req_hash = payload.substr(0, hlen); payload.remove_prefix(hlen);
+
+        std::uint64_t ttl_ms;
+        std::memcpy(&ttl_ms, payload.data(), 8); ttl_ms = be64toh(ttl_ms); payload.remove_prefix(8);
+
+        std::uint16_t olen;
+        std::memcpy(&olen, payload.data(), 2); olen = ntohs(olen); payload.remove_prefix(2);
+        std::string_view owner_token;
+        if (olen > 0 && payload.size() >= olen)
+        {
+            owner_token = payload.substr(0, olen);
+        }
+
+        const auto res = store_->IdemBegin(key, req_hash, ttl_ms, owner_token);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(res.action == storage::IdempotencyAction::Conflict
+                ? protocol::gkwp2::BinaryStatus::Conflict
+                : protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_ && res.action == storage::IdempotencyAction::Execute)
+        {
+            aof_writer_->Append("GK.IDEM_BEGIN", "{\"key\":\"" + std::string(key) + "\",\"request_hash\":\"" + std::string(req_hash) +
+                "\",\"ttl_ms\":" + std::to_string(ttl_ms) + ",\"owner_token\":\"" + res.owner_token + "\"}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        std::uint8_t action_byte = 0;
+        if (res.action == storage::IdempotencyAction::Park) action_byte = 1;
+        else if (res.action == storage::IdempotencyAction::Replay) action_byte = 2;
+        else if (res.action == storage::IdempotencyAction::Conflict) action_byte = 3;
+        resp.push_back(static_cast<char>(action_byte));
+
+        std::uint16_t tok_len = htons(static_cast<std::uint16_t>(res.owner_token.size()));
+        resp.append(reinterpret_cast<const char*>(&tok_len), 2);
+        resp.append(res.owner_token);
+
+        std::uint16_t code_net = htons(static_cast<std::uint16_t>(res.cached_code));
+        resp.append(reinterpret_cast<const char*>(&code_net), 2);
+        std::uint32_t clen_net = htonl(static_cast<std::uint32_t>(res.cached_response.size()));
+        resp.append(reinterpret_cast<const char*>(&clen_net), 4);
+        resp.append(res.cached_response);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::IdemComplete:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2); key_len = ntohs(key_len); payload.remove_prefix(2);
+        if (payload.size() < key_len + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len); payload.remove_prefix(key_len);
+
+        std::uint16_t olen;
+        std::memcpy(&olen, payload.data(), 2); olen = ntohs(olen); payload.remove_prefix(2);
+        if (payload.size() < olen + 2 + 4) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto owner_token = payload.substr(0, olen); payload.remove_prefix(olen);
+
+        std::uint16_t code_net;
+        std::memcpy(&code_net, payload.data(), 2); int code = ntohs(code_net); payload.remove_prefix(2);
+
+        std::uint32_t blen_net;
+        std::memcpy(&blen_net, payload.data(), 4); std::uint32_t blen = ntohl(blen_net); payload.remove_prefix(4);
+        if (payload.size() < blen) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto body = payload.substr(0, blen);
+
+        const auto res = store_->IdemComplete(key, owner_token, code, body);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_)
+        {
+            aof_writer_->Append("GK.IDEM_COMPLETE", "{\"key\":\"" + std::string(key) + "\",\"owner_token\":\"" + std::string(owner_token) +
+                "\",\"response_code\":" + std::to_string(code) + ",\"response_body\":\"" + std::string(body) + "\"}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(1);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::IdemFail:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t key_len;
+        std::memcpy(&key_len, payload.data(), 2); key_len = ntohs(key_len); payload.remove_prefix(2);
+        if (payload.size() < key_len + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto key = payload.substr(0, key_len); payload.remove_prefix(key_len);
+
+        std::uint16_t olen;
+        std::memcpy(&olen, payload.data(), 2); olen = ntohs(olen); payload.remove_prefix(2);
+        if (payload.size() < olen) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto owner_token = payload.substr(0, olen);
+        payload.remove_prefix(olen);
+
+        std::string_view err_msg;
+        if (payload.size() >= 2)
+        {
+            std::uint16_t mlen;
+            std::memcpy(&mlen, payload.data(), 2);
+            mlen = ntohs(mlen);
+            if (payload.size() >= 2 + mlen)
+            {
+                err_msg = payload.substr(2, mlen);
+            }
+        }
+
+        const auto res = store_->IdemFail(key, owner_token, err_msg);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_)
+        {
+            aof_writer_->Append("GK.IDEM_FAIL", "{\"key\":\"" + std::string(key) + "\",\"owner_token\":\"" + std::string(owner_token) + "\"}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(1);
         return resp;
     }
     default:
         return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
     }
-}
-
-std::string Processor::Process(std::string_view payload) const
-{
-    if (!payload.empty() && payload.front() != '{')
-    {
-        return ProcessBinary(payload);
-    }
-
-    protocol::Request request;
-    protocol::Error error;
-    const protocol::Parser parser;
-    if (!parser.Parse(payload, request, error))
-    {
-        const auto err_response = protocol::EncodeErrorResponse(request.id, error);
-        logger_->Warn("Failed to parse request: " + error.code + " - " + error.message);
-        logger_->Info("Response GKWP: " + err_response);
-        return err_response;
-    }
-    logger_->Info("Executing request id=\"" + request.id + "\" op=\"" + request.op + "\"");
-    const auto result = dispatch_(request);
-    std::string response;
-    if (result.ok)
-    {
-        response = protocol::EncodeSuccessResponse(request.id, result.result_json);
-        logger_->Info("Response GKWP: " + response);
-    }
-    else
-    {
-        response = protocol::EncodeErrorResponse(request.id, result.error);
-        logger_->Warn("Response GKWP: " + response);
-    }
-    return response;
 }
 
 }
