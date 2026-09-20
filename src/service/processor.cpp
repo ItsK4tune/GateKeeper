@@ -1,5 +1,6 @@
 #include "gatekeeper/service/processor.h"
 #include "gatekeeper/protocol/gkwp2/binary_codec.h"
+#include "gatekeeper/protocol/response.h"
 
 #include <arpa/inet.h>
 #include <cstring>
@@ -107,7 +108,7 @@ std::string Processor::Process(std::string_view payload) const
         }
         if (aof_writer_)
         {
-            std::string aof = "{\"key\":\"" + std::string(key) + "\",\"value\":\"" + std::string(val) + "\"";
+            std::string aof = "{\"key\":" + protocol::QuoteJson(key) + ",\"value\":" + protocol::QuoteJson(val);
             if (ttl_ms > 0) aof += ",\"ttl_ms\":" + std::to_string(ttl_ms);
             if (cond == storage::WriteCondition::IfAbsent) aof += ",\"if_not_exists\":true";
             else if (cond == storage::WriteCondition::IfPresent) aof += ",\"if_exists\":true";
@@ -129,7 +130,7 @@ std::string Processor::Process(std::string_view payload) const
         const bool deleted = store_->Del(key);
         if (deleted && aof_writer_)
         {
-            aof_writer_->Append("DEL", "{\"key\":\"" + std::string(key) + "\"}");
+            aof_writer_->Append("DEL", "{\"key\":" + protocol::QuoteJson(key) + "}");
         }
         std::string resp;
         resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
@@ -191,7 +192,7 @@ std::string Processor::Process(std::string_view payload) const
         const bool success = store_->Expire(key, ttl_ms);
         if (success && aof_writer_)
         {
-            aof_writer_->Append("PEXPIRE", "{\"key\":\"" + std::string(key) + "\",\"ttl_ms\":" + std::to_string(ttl_ms) + "}");
+            aof_writer_->Append("PEXPIRE", "{\"key\":" + protocol::QuoteJson(key) + ",\"ttl_ms\":" + std::to_string(ttl_ms) + "}");
         }
         std::string resp;
         resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
@@ -239,7 +240,7 @@ std::string Processor::Process(std::string_view payload) const
         }
         if (aof_writer_)
         {
-            std::string aof = "{\"key\":\"" + std::string(key) + "\",\"delta\":" + std::to_string(delta);
+            std::string aof = "{\"key\":" + protocol::QuoteJson(key) + ",\"delta\":" + std::to_string(delta);
             if (init_ttl_ms > 0) aof += ",\"ttl_ms\":" + std::to_string(init_ttl_ms);
             aof += "}";
             aof_writer_->Append("INCRBY", aof);
@@ -302,7 +303,7 @@ std::string Processor::Process(std::string_view payload) const
         store_->Set(std::string(key), std::to_string(amount), storage::WriteCondition::Always, 0);
         if (aof_writer_)
         {
-            aof_writer_->Append("GK.QUOTA_INIT", "{\"key\":\"" + std::string(key) + "\",\"amount\":" + std::to_string(amount) + "}");
+            aof_writer_->Append("GK.QUOTA_INIT", "{\"key\":" + protocol::QuoteJson(key) + ",\"amount\":" + std::to_string(amount) + "}");
         }
         return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
     }
@@ -430,7 +431,7 @@ std::string Processor::Process(std::string_view payload) const
 
         if (aof_writer_)
         {
-            aof_writer_->Append("GK.ROLLBACK", "{\"key\":\"" + std::string(key) + "\",\"reservation_id\":\"" + std::string(res_id) + "\"}");
+            aof_writer_->Append("GK.ROLLBACK", "{\"key\":" + protocol::QuoteJson(key) + ",\"reservation_id\":" + protocol::QuoteJson(res_id) + "}");
         }
 
         std::string resp;
