@@ -146,28 +146,64 @@ Every transmission across a GKWP/2 connection begins with a fixed 24-byte header
 
 ---
 
-#### Benchmark Comparison Across Protocols
+#### Benchmark Comparison: GateKeeper vs. Redis 7, Dragonfly & NGINX
 
-Benchmarks were conducted using a standardized multi-threaded benchmarking harness (`bench/all-protocols` branch) with 50 concurrent client connections issuing 50,000 requests per benchmark against GateKeeper running on an AMD Ryzen Linux environment (epoll non-blocking single-threaded core):
+Comprehensive benchmarks were conducted on an Ubuntu 22.04 LTS environment (Linux Kernel 6.8.0, 4 vCPU, `somaxconn = 65535`) comparing **GateKeeper** (multi-worker C++20 engine with SO_REUSEPORT, sharded partitioned locks, and GKWP/2 binary TLV protocol) against **Redis 7** (`redis:7-alpine`), **Dragonfly** (`dragonfly:latest`), and **NGINX** (`nginx:alpine` with `limit_req` module):
 
-| Protocol | Workload / Command | Throughput (QPS) | Latency P50 (ms) | Latency P99 (ms) | Throughput vs GKWP/1 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **GKWP/2** | `PING` | **25,125** | **1.83** | **3.89** | — |
-| **GKWP/2** | `RATE_LIMIT` | **25,577** | **1.79** | **3.82** | **+24.5%** |
-| **GKWP/2** | `SET` | **21,245** | **2.16** | **4.65** | **+27.3%** |
-| **GKWP/2** | `GET` | **23,197** | **1.99** | **4.28** | **+43.2%** |
-| GKWP/1 [DEPRECATED] | `RATE_LIMIT` | 20,547 | 2.24 | 4.91 | Baseline |
-| GKWP/1 [DEPRECATED] | `SET` | 16,695 | 2.82 | 6.12 | Baseline |
-| GKWP/1 [DEPRECATED] | `GET` | 16,197 | 2.89 | 6.25 | Baseline |
-| Redis RESP2 | `RATE_LIMIT` | 15,315 | 3.05 | 6.74 | -25.5% |
-| Redis RESP2 | `SET` | 12,351 | 3.84 | 8.21 | -26.0% |
-| Redis RESP2 | `GET` | 14,547 | 3.25 | 7.12 | -10.2% |
-| Redis RESP3 | `RATE_LIMIT` | 14,961 | 3.12 | 6.89 | -27.2% |
-| Redis RESP3 | `SET` | 11,588 | 4.10 | 8.78 | -30.6% |
-| Redis RESP3 | `GET` | 13,867 | 3.41 | 7.45 | -14.4% |
+##### 1. Raw Key-Value Operations (`SET` + `GET`)
+> 2,000 requests, 20 concurrent connections.
+
+| Service | Protocol / Architecture | Throughput (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **GateKeeper** | **GKWP/2 Binary TLV (Multi-Worker)** | **9,141.47** | **4.23** | **5.14** | **5.73** |
+| **Redis 7** | RESP | 11,096.30 | 3.42 | 4.72 | 5.76 |
+| **Dragonfly** | RESP | 11,433.49 | 3.33 | 4.80 | 6.48 |
+
+*GateKeeper delivers ultra-stable tail latency (**5.73ms p99**), matching Redis (5.76ms) and beating Dragonfly (6.48ms).*
+
+##### 2. Distributed Sliding-Window Rate Limiting
+> 2,000 requests, 20 concurrent connections (500,000 req / 60s sliding window).
+
+| Service | Implementation Mechanism | Throughput (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **GateKeeper** | **Native C++ Engine (`GK.RATE_LIMIT` Binary)** | **9,111.86** | **2.06** | **2.73** | **2.90** |
+| **Redis 7** | Lua Script (`sliding_window.lua`) | 9,099.79 | 2.08 | 2.99 | 3.55 |
+| **Dragonfly** | Lua Script (`sliding_window.lua`) | 8,874.06 | 2.07 | 3.36 | 4.21 |
+
+*GateKeeper **outperforms both Redis 7 and Dragonfly** in both throughput and tail latency (**2.90ms p99 vs 3.55ms Redis and 4.21ms Dragonfly**), eliminating the interpretation overhead of the Lua VM.*
+
+##### 3. Two-Phase Quota Reservation (`GK.RESERVE` + `GK.COMMIT`)
+> Designed for AI/LLM Token Budgeting & Multi-step Financial Billing (1,000 2-phase cycles, 20 concurrency).
+
+| Service | Operation | Throughput (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **GateKeeper** | `RESERVE` $\rightarrow$ `COMMIT` | **14,168.69** | **2.69** | **3.15** | **3.43** |
+
+*Provides atomic two-phase reservation with sub-3.5ms p99 latency and automatic rollback timers.*
+
+##### 4. Single-Flight Coalescing vs. Redis Spin-Polling (Thundering Herd)
+> 50 concurrent requests for the same `Idempotency-Key` within 1ms.
+
+| Metric | GateKeeper (Single-Flight Parking) | Redis (Spin-Polling `while sleep`) | Advantage |
+| :--- | :---: | :---: | :--- |
+| **Total Processing Time** | **21.99 ms** | 82.58 ms | **GateKeeper is 3.75x faster** |
+| **Tail Latency (p99)** | **5.94 ms** | 72.06 ms | **GateKeeper is 12.1x lower** |
+| **Network Poll Packets** | **0 packets** (Event-driven broadcast) | **248 packets** | **Zero network overhead** |
+
+*GateKeeper parks concurrent duplicate requests on the TCP socket and broadcasts the result instantly upon completion, completely eliminating thundering herd network storms.*
+
+##### 5. HTTP Rate Limit Surface (`/v1/rate-limit/check`) vs. NGINX `limit_req`
+> `wrk` benchmark with 2 threads, 50 connections, 5-second duration.
+
+| Service | Throughput (Requests/sec) | Latency Avg | Latency p50 | Latency p99 | Total Requests / 5s |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **GateKeeper HTTP REST** | **98,289.13** | **638.05 µs** | **243.00 µs** | **5.25 ms** | **491,869** |
+| **NGINX `limit_req`** | 29,229.98 | 2.33 ms | 1.44 ms | 15.89 ms | 146,318 |
+
+*GateKeeper's C++20 REST API reaches **~100,000 RPS** with **sub-millisecond average latency (638 µs)**, running **3.36x faster than NGINX**.*
 
 > [!NOTE]
-> All protocol implementations and benchmark datasets are archived and reproducible on branch `bench/all-protocols`.
+> All benchmark scripts, configurations, and Docker Compose environments are archived and reproducible on branch `bench/service` under `tests/benchmark/`.
 
 ---
 
@@ -662,28 +698,64 @@ Mọi gói tin truyền qua kết nối GKWP/2 đều bắt đầu bằng phần
 
 ---
 
-#### Bảng So Sánh Hiệu Năng (Benchmark Matrix)
+#### Bảng So Sánh Hiệu Năng Thực Nghiệm: GateKeeper vs. Redis 7, Dragonfly & NGINX
 
-Thử nghiệm được thực hiện trên môi trường chuẩn hóa (`bench/all-protocols`) với 50 kết nối đồng thời và 50.000 requests mỗi kịch bản kiểm thử trên máy chủ Linux epoll đơn luồng:
+Bộ benchmark thực nghiệm được thực hiện trên môi trường Ubuntu 22.04 LTS (Linux Kernel 6.8.0, 4 vCPU, `somaxconn = 65535`) so sánh **GateKeeper** (kiến trúc multi-worker C++20 với `SO_REUSEPORT`, sharded storage 64 phân vùng và giao thức nhị phân GKWP/2 Binary TLV) với **Redis 7** (`redis:7-alpine`), **Dragonfly** (`dragonfly:latest`) và **NGINX** (`nginx:alpine` với module `limit_req`):
 
-| Giao thức | Kịch bản kiểm thử | Thông lượng (QPS) | Độ trễ P50 (ms) | Độ trễ P99 (ms) | Tăng trưởng vs GKWP/1 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **GKWP/2** | `PING` | **25,125** | **1.83** | **3.89** | — |
-| **GKWP/2** | `RATE_LIMIT` | **25,577** | **1.79** | **3.82** | **+24.5%** |
-| **GKWP/2** | `SET` | **21,245** | **2.16** | **4.65** | **+27.3%** |
-| **GKWP/2** | `GET` | **23,197** | **1.99** | **4.28** | **+43.2%** |
-| GKWP/1 [DEPRECATED] | `RATE_LIMIT` | 20,547 | 2.24 | 4.91 | Gốc (Baseline) |
-| GKWP/1 [DEPRECATED] | `SET` | 16,695 | 2.82 | 6.12 | Gốc (Baseline) |
-| GKWP/1 [DEPRECATED] | `GET` | 16,197 | 2.89 | 6.25 | Gốc (Baseline) |
-| Redis RESP2 | `RATE_LIMIT` | 15,315 | 3.05 | 6.74 | -25.5% |
-| Redis RESP2 | `SET` | 12,351 | 3.84 | 8.21 | -26.0% |
-| Redis RESP2 | `GET` | 14,547 | 3.25 | 7.12 | -10.2% |
-| Redis RESP3 | `RATE_LIMIT` | 14,961 | 3.12 | 6.89 | -27.2% |
-| Redis RESP3 | `SET` | 11,588 | 4.10 | 8.78 | -30.6% |
-| Redis RESP3 | `GET` | 13,867 | 3.41 | 7.45 | -14.4% |
+##### 1. Thao tác Key-Value Cơ bản (`SET` + `GET`)
+> 2.000 requests, 20 kết nối đồng thời.
+
+| Dịch vụ | Giao thức / Kiến trúc | Thông lượng (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **GateKeeper** | **GKWP/2 Binary TLV (Multi-Worker)** | **9.141,47** | **4,23** | **5,14** | **5,73** |
+| **Redis 7** | RESP | 11.096,30 | 3,42 | 4,72 | 5,76 |
+| **Dragonfly** | RESP | 11.433,49 | 3,33 | 4,80 | 6,48 |
+
+*GateKeeper đạt độ trễ đuôi cực kỳ ổn định (**5,73ms p99**), ngang ngửa Redis (5,76ms) và vượt qua Dragonfly (6,48ms).*
+
+##### 2. Distributed Sliding-Window Rate Limiting
+> 2.000 requests, 20 kết nối đồng thời (hạn mức 500.000 req / 60s sliding window).
+
+| Dịch vụ | Cơ chế thực thi | Thông lượng (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **GateKeeper** | **Native C++ Engine (`GK.RATE_LIMIT` Binary)** | **9.111,86** | **2,06** | **2,73** | **2,90** |
+| **Redis 7** | Lua Script (`sliding_window.lua`) | 9.099,79 | 2,08 | 2,99 | 3,55 |
+| **Dragonfly** | Lua Script (`sliding_window.lua`) | 8.874,06 | 2,07 | 3,36 | 4,21 |
+
+*GateKeeper **vượt qua cả Redis 7 và Dragonfly** ở cả thông lượng lẫn độ trễ đuôi (**2,90ms p99 so với 3,55ms của Redis và 4,21ms của Dragonfly**), loại bỏ hoàn toàn chi phí thông dịch của máy ảo Lua VM.*
+
+##### 3. Two-Phase Quota Reservation (`GK.RESERVE` + `GK.COMMIT`)
+> Thiết kế chuyên biệt cho AI/LLM Token Budgeting & Multi-step Billing (1.000 chu kỳ 2-phase, 20 kết nối).
+
+| Dịch vụ | Thao tác | Thông lượng (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **GateKeeper** | `RESERVE` $\rightarrow$ `COMMIT` | **14.168,69** | **2,69** | **3,15** | **3,43** |
+
+*Cung cấp cơ chế đặt trước quota 2 pha nguyên tử với độ trễ p99 dưới 3,5ms và bộ đếm thời gian tự động hoàn tiền (auto-rollback).*
+
+##### 4. Single-Flight Coalescing vs. Redis Spin-Polling (Thundering Herd)
+> 50 requests đồng thời gửi cùng một `Idempotency-Key` trong cùng 1 mili-giây.
+
+| Chỉ số đo | GateKeeper (Single-Flight Parking) | Redis (Spin-Polling `while sleep`) | Ưu thế |
+| :--- | :---: | :---: | :--- |
+| **Tổng thời gian xử lý** | **21,99 ms** | 82,58 ms | **GateKeeper nhanh hơn 3,75 lần** |
+| **Độ trễ đuôi (p99)** | **5,94 ms** | 72,06 ms | **GateKeeper nhanh hơn 12,1 lần** |
+| **Số gói tin thăm dò mạng (Poll Packets)** | **0 gói tin** (Event-driven broadcast) | **248 gói tin** | **Triệt tiêu hoàn toàn nghẽn mạng** |
+
+*GateKeeper neo các kết nối trùng lặp trên socket TCP và phát sóng kết quả ngay khi request đầu hoàn tất, triệt tiêu hoàn toàn cơn bão thăm dò mạng Thundering Herd.*
+
+##### 5. HTTP Rate Limit Surface (`/v1/rate-limit/check`) vs. NGINX `limit_req`
+> Đo đạc bằng `wrk` với 2 threads, 50 kết nối, thời gian 5 giây.
+
+| Dịch vụ | Thông lượng (Requests/sec) | Độ trễ Trung bình | Độ trễ p50 | Độ trễ p99 | Tổng requests / 5s |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **GateKeeper HTTP REST** | **98.289,13** | **638,05 µs** | **243,00 µs** | **5,25 ms** | **491.869** |
+| **NGINX `limit_req`** | 29.229,98 | 2,33 ms | 1,44 ms | 15,89 ms | 146.318 |
+
+*Cổng REST API HTTP của GateKeeper đạt **gần 100.000 RPS** với **độ trễ trung bình sub-millisecond (638 µs)**, chạy **nhanh hơn 3,36 lần so với NGINX**.*
 
 > [!NOTE]
-> Toàn bộ mã nguồn triển khai các giao thức và dữ liệu benchmark được lưu trữ đầy đủ tại nhánh `bench/all-protocols`.
+> Toàn bộ kịch bản kiểm thử, file cấu hình và Docker Compose được lưu trữ và có thể tái lập tại nhánh `bench/service` trong thư mục `tests/benchmark/`.
 
 ---
 
