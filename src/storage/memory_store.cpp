@@ -62,14 +62,26 @@ bool MatchPattern(std::string_view pattern, std::string_view str)
 
 }
 
+StorageShard& MemoryStore::GetShard(std::string_view key) const noexcept
+{
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (char c : key)
+    {
+        hash ^= static_cast<std::uint8_t>(c);
+        hash *= 1099511628211ULL;
+    }
+    return shards_[hash & (kNumShards - 1)];
+}
+
 bool MemoryStore::Set(std::string key, std::string value, WriteCondition condition, std::uint64_t ttl_ms)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
-    auto* existing = entries_.Find(key);
+    auto* existing = shard.entries.Find(key);
     if (existing != nullptr && existing->meta.IsExpired(now))
     {
-        entries_.Erase(key);
+        shard.entries.Erase(key);
         existing = nullptr;
     }
     if (condition == WriteCondition::IfAbsent && existing != nullptr)
@@ -84,7 +96,7 @@ bool MemoryStore::Set(std::string key, std::string value, WriteCondition conditi
     if (existing == nullptr)
     {
         Entry entry{key, std::move(value), EntryMetadata{DataType::String, now, expire_at}};
-        entries_.Insert(std::move(key), std::move(entry));
+        shard.entries.Insert(std::move(key), std::move(entry));
     }
     else
     {
@@ -97,17 +109,18 @@ bool MemoryStore::Set(std::string key, std::string value, WriteCondition conditi
 
 std::optional<std::string> MemoryStore::Get(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing == nullptr)
     {
         return std::nullopt;
     }
     if (existing->meta.IsExpired(now))
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         return std::nullopt;
     }
     return existing->value;
@@ -115,23 +128,25 @@ std::optional<std::string> MemoryStore::Get(std::string_view key) const
 
 bool MemoryStore::Del(std::string_view key)
 {
-    const std::lock_guard lock(mutex_);
-    return entries_.Erase(std::string(key));
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
+    return shard.entries.Erase(std::string(key));
 }
 
 bool MemoryStore::Exists(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing == nullptr)
     {
         return false;
     }
     if (existing->meta.IsExpired(now))
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         return false;
     }
     return true;
@@ -139,17 +154,18 @@ bool MemoryStore::Exists(std::string_view key) const
 
 DataType MemoryStore::Type(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing == nullptr)
     {
         return DataType::None;
     }
     if (existing->meta.IsExpired(now))
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         return DataType::None;
     }
     return existing->meta.type;
@@ -157,43 +173,52 @@ DataType MemoryStore::Type(std::string_view key) const
 
 std::size_t MemoryStore::DbSize() const
 {
-    const std::lock_guard lock(mutex_);
     const auto now = CurrentTimeMs();
     std::size_t count = 0;
-    entries_.ForEach([&](const std::string&, const Entry& entry) {
-        if (!entry.meta.IsExpired(now))
-        {
-            ++count;
-        }
-    });
+    for (const auto& shard : shards_)
+    {
+        const std::lock_guard lock(shard.mutex);
+        shard.entries.ForEach([&](const std::string&, const Entry& entry) {
+            if (!entry.meta.IsExpired(now))
+            {
+                ++count;
+            }
+        });
+    }
     return count;
 }
 
 std::vector<std::string> MemoryStore::Keys(std::string_view pattern) const
 {
-    const std::lock_guard lock(mutex_);
     const auto now = CurrentTimeMs();
     std::vector<std::string> matched;
-    entries_.ForEach([&](const std::string& key, const Entry& entry) {
-        if (!entry.meta.IsExpired(now) && MatchPattern(pattern, key))
-        {
-            matched.push_back(key);
-        }
-    });
+    for (const auto& shard : shards_)
+    {
+        const std::lock_guard lock(shard.mutex);
+        shard.entries.ForEach([&](const std::string& key, const Entry& entry) {
+            if (!entry.meta.IsExpired(now) && MatchPattern(pattern, key))
+            {
+                matched.push_back(key);
+            }
+        });
+    }
     return matched;
 }
 
 std::pair<std::size_t, std::vector<std::string>> MemoryStore::Scan(std::size_t cursor, std::size_t count) const
 {
-    const std::lock_guard lock(mutex_);
     const auto now = CurrentTimeMs();
     std::vector<std::string> current_keys;
-    entries_.ForEach([&](const std::string& key, const Entry& entry) {
-        if (!entry.meta.IsExpired(now))
-        {
-            current_keys.push_back(key);
-        }
-    });
+    for (const auto& shard : shards_)
+    {
+        const std::lock_guard lock(shard.mutex);
+        shard.entries.ForEach([&](const std::string& key, const Entry& entry) {
+            if (!entry.meta.IsExpired(now))
+            {
+                current_keys.push_back(key);
+            }
+        });
+    }
 
     if (cursor >= current_keys.size())
     {
@@ -213,21 +238,22 @@ std::pair<std::size_t, std::vector<std::string>> MemoryStore::Scan(std::size_t c
 
 bool MemoryStore::Expire(std::string_view key, std::uint64_t ttl_ms)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing == nullptr || existing->meta.IsExpired(now))
     {
         if (existing != nullptr)
         {
-            entries_.Erase(key_str);
+            shard.entries.Erase(key_str);
         }
         return false;
     }
     if (ttl_ms == 0)
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         return true;
     }
     existing->meta.expire_at_ms = now + ttl_ms;
@@ -236,17 +262,18 @@ bool MemoryStore::Expire(std::string_view key, std::uint64_t ttl_ms)
 
 std::int64_t MemoryStore::Ttl(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing == nullptr)
     {
         return -2;
     }
     if (existing->meta.IsExpired(now))
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         return -2;
     }
     if (existing->meta.expire_at_ms == 0)
@@ -259,17 +286,18 @@ std::int64_t MemoryStore::Ttl(std::string_view key) const
 
 std::int64_t MemoryStore::Pttl(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing == nullptr)
     {
         return -2;
     }
     if (existing->meta.IsExpired(now))
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         return -2;
     }
     if (existing->meta.expire_at_ms == 0)
@@ -281,15 +309,16 @@ std::int64_t MemoryStore::Pttl(std::string_view key) const
 
 bool MemoryStore::Persist(std::string_view key)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing == nullptr || existing->meta.IsExpired(now))
     {
         if (existing != nullptr)
         {
-            entries_.Erase(key_str);
+            shard.entries.Erase(key_str);
         }
         return false;
     }
@@ -303,13 +332,14 @@ bool MemoryStore::Persist(std::string_view key)
 
 IncrResult MemoryStore::IncrBy(std::string_view key, std::int64_t delta, std::uint64_t init_ttl_ms)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing != nullptr && existing->meta.IsExpired(now))
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         existing = nullptr;
     }
 
@@ -317,7 +347,7 @@ IncrResult MemoryStore::IncrBy(std::string_view key, std::int64_t delta, std::ui
     {
         const auto expire_at = init_ttl_ms > 0 ? now + init_ttl_ms : 0;
         Entry entry{key_str, std::to_string(delta), EntryMetadata{DataType::String, now, expire_at}};
-        entries_.Insert(key_str, std::move(entry));
+        shard.entries.Insert(key_str, std::move(entry));
         return {true, delta, {}, {}};
     }
 
@@ -367,14 +397,15 @@ RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit
         cost = 1;
     }
 
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
 
     const auto current_idx = now / window_ms;
     const auto elapsed_in_window = now % window_ms;
 
-    auto* record = rate_limits_.Find(key_str);
+    auto* record = shard.rate_limits.Find(key_str);
     if (record != nullptr)
     {
         if (record->IsExpired(now))
@@ -421,8 +452,8 @@ RateLimitResult MemoryStore::RateLimit(std::string_view key, std::uint64_t limit
         new_rec.previous_count = 0;
         new_rec.window_ms = window_ms;
         new_rec.expire_at_ms = (current_idx + 2) * window_ms;
-        rate_limits_.Insert(key_str, std::move(new_rec));
-        record = rate_limits_.Find(key_str);
+        shard.rate_limits.Insert(key_str, std::move(new_rec));
+        record = shard.rate_limits.Find(key_str);
     }
 
     const double weight_prev = 1.0 - (static_cast<double>(elapsed_in_window) / static_cast<double>(window_ms));
@@ -456,13 +487,14 @@ ReservationResult MemoryStore::ReserveQuota(std::string_view key, std::uint64_t 
         return {false, false, "", 0, "INVALID_ARGUMENTS", "ttl_ms must be greater than zero"};
     }
 
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
-    auto* existing = entries_.Find(key_str);
+    auto* existing = shard.entries.Find(key_str);
     if (existing != nullptr && existing->meta.IsExpired(now))
     {
-        entries_.Erase(key_str);
+        shard.entries.Erase(key_str);
         existing = nullptr;
     }
 
@@ -496,17 +528,18 @@ ReservationResult MemoryStore::ReserveQuota(std::string_view key, std::uint64_t 
 
     const auto res_id = "res_" + std::to_string(now) + "_" + std::to_string(next_reservation_seq_++);
     Reservation res{res_id, key_str, amount, now, now + ttl_ms};
-    reservations_.Insert(res_id, std::move(res));
+    shard.reservations.Insert(res_id, std::move(res));
 
     return {true, true, res_id, balance, {}, {}};
 }
 
 CommitResult MemoryStore::CommitQuota(std::string_view key, std::string_view reservation_id, std::uint64_t actual_amount)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto res_id_str = std::string(reservation_id);
-    auto* res = reservations_.Find(res_id_str);
+    auto* res = shard.reservations.Find(res_id_str);
 
     if (res == nullptr || res->key != key)
     {
@@ -515,7 +548,7 @@ CommitResult MemoryStore::CommitQuota(std::string_view key, std::string_view res
 
     if (res->IsExpired(now))
     {
-        auto* target = entries_.Find(res->key);
+        auto* target = shard.entries.Find(res->key);
         if (target != nullptr)
         {
             try
@@ -529,15 +562,15 @@ CommitResult MemoryStore::CommitQuota(std::string_view key, std::string_view res
                 target->value = std::to_string(res->amount);
             }
         }
-        reservations_.Erase(res_id_str);
+        shard.reservations.Erase(res_id_str);
         return {false, false, 0, 0, 0, "RESERVATION_EXPIRED", "reservation expired and was automatically rolled back"};
     }
 
     const auto reserved_amount = res->amount;
     const auto key_str = res->key;
-    reservations_.Erase(res_id_str);
+    shard.reservations.Erase(res_id_str);
 
-    auto* target = entries_.Find(key_str);
+    auto* target = shard.entries.Find(key_str);
     std::uint64_t balance = 0;
     if (target != nullptr)
     {
@@ -577,7 +610,7 @@ CommitResult MemoryStore::CommitQuota(std::string_view key, std::string_view res
     else
     {
         Entry entry{key_str, std::to_string(balance), EntryMetadata{DataType::String, now, 0}};
-        entries_.Insert(key_str, std::move(entry));
+        shard.entries.Insert(key_str, std::move(entry));
     }
 
     return {true, true, actual_amount, refunded, balance, {}, {}};
@@ -585,10 +618,11 @@ CommitResult MemoryStore::CommitQuota(std::string_view key, std::string_view res
 
 RollbackResult MemoryStore::RollbackQuota(std::string_view key, std::string_view reservation_id)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto res_id_str = std::string(reservation_id);
-    auto* res = reservations_.Find(res_id_str);
+    auto* res = shard.reservations.Find(res_id_str);
 
     if (res == nullptr || res->key != key)
     {
@@ -598,9 +632,9 @@ RollbackResult MemoryStore::RollbackQuota(std::string_view key, std::string_view
     const auto refund_amount = res->amount;
     const auto key_str = res->key;
     const bool was_expired = res->IsExpired(now);
-    reservations_.Erase(res_id_str);
+    shard.reservations.Erase(res_id_str);
 
-    auto* target = entries_.Find(key_str);
+    auto* target = shard.entries.Find(key_str);
     std::uint64_t balance = 0;
     if (target != nullptr)
     {
@@ -624,7 +658,7 @@ RollbackResult MemoryStore::RollbackQuota(std::string_view key, std::string_view
         else
         {
             Entry entry{key_str, std::to_string(balance), EntryMetadata{DataType::String, now, 0}};
-            entries_.Insert(key_str, std::move(entry));
+            shard.entries.Insert(key_str, std::move(entry));
         }
     }
 
@@ -637,14 +671,15 @@ IdempotencyBeginResult MemoryStore::IdemBegin(
     std::uint64_t ttl_ms,
     std::string_view owner_token)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
 
-    auto* record = idempotency_records_.Find(key_str);
+    auto* record = shard.idempotency_records.Find(key_str);
     if (record != nullptr && record->IsExpired(now))
     {
-        idempotency_records_.Erase(key_str);
+        shard.idempotency_records.Erase(key_str);
         record = nullptr;
     }
 
@@ -664,7 +699,7 @@ IdempotencyBeginResult MemoryStore::IdemBegin(
         rec.response_code = 0;
         rec.response_body = "";
 
-        idempotency_records_.Insert(key_str, std::move(rec));
+        shard.idempotency_records.Insert(key_str, std::move(rec));
         return {true, IdempotencyAction::Execute, token, 0, "", {}, {}};
     }
 
@@ -712,11 +747,12 @@ IdempotencyCompleteResult MemoryStore::IdemComplete(
     int response_code,
     std::string_view response_body)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
 
-    auto* record = idempotency_records_.Find(key_str);
+    auto* record = shard.idempotency_records.Find(key_str);
     if (record == nullptr)
     {
         return {false, false, "ERR_NOT_FOUND", "Idempotency record not found"};
@@ -724,7 +760,7 @@ IdempotencyCompleteResult MemoryStore::IdemComplete(
 
     if (record->IsExpired(now))
     {
-        idempotency_records_.Erase(key_str);
+        shard.idempotency_records.Erase(key_str);
         return {false, false, "ERR_EXPIRED", "Idempotency record has expired"};
     }
 
@@ -750,11 +786,12 @@ IdempotencyFailResult MemoryStore::IdemFail(
     std::string_view owner_token,
     std::string_view error_message)
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
 
-    auto* record = idempotency_records_.Find(key_str);
+    auto* record = shard.idempotency_records.Find(key_str);
     if (record == nullptr)
     {
         return {false, false, "ERR_NOT_FOUND", "Idempotency record not found"};
@@ -762,7 +799,7 @@ IdempotencyFailResult MemoryStore::IdemFail(
 
     if (record->IsExpired(now))
     {
-        idempotency_records_.Erase(key_str);
+        shard.idempotency_records.Erase(key_str);
         return {false, false, "ERR_EXPIRED", "Idempotency record has expired"};
     }
 
@@ -779,11 +816,12 @@ IdempotencyFailResult MemoryStore::IdemFail(
 
 std::optional<IdempotencyRecord> MemoryStore::IdemGet(std::string_view key) const
 {
-    const std::lock_guard lock(mutex_);
+    auto& shard = GetShard(key);
+    const std::lock_guard lock(shard.mutex);
     const auto now = CurrentTimeMs();
     const auto key_str = std::string(key);
 
-    auto* record = idempotency_records_.Find(key_str);
+    auto* record = shard.idempotency_records.Find(key_str);
     if (record == nullptr)
     {
         return std::nullopt;
@@ -791,7 +829,7 @@ std::optional<IdempotencyRecord> MemoryStore::IdemGet(std::string_view key) cons
 
     if (record->IsExpired(now))
     {
-        idempotency_records_.Erase(key_str);
+        shard.idempotency_records.Erase(key_str);
         return std::nullopt;
     }
 
@@ -800,81 +838,88 @@ std::optional<IdempotencyRecord> MemoryStore::IdemGet(std::string_view key) cons
 
 std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
 {
-    const std::lock_guard lock(mutex_);
     const auto now = CurrentTimeMs();
+    std::size_t total_purged = 0;
 
-    std::vector<std::string> expired_keys;
-    entries_.ForEach([&](const std::string& k, const Entry& e) {
-        if (expired_keys.size() < sample_limit && e.meta.IsExpired(now))
-        {
-            expired_keys.push_back(k);
-        }
-    });
-    for (const auto& k : expired_keys)
+    for (auto& shard : shards_)
     {
-        entries_.Erase(k);
-    }
+        const std::lock_guard lock(shard.mutex);
 
-    std::vector<std::string> expired_reservations;
-    reservations_.ForEach([&](const std::string& id, const Reservation& res) {
-        if (expired_reservations.size() < sample_limit && res.IsExpired(now))
-        {
-            expired_reservations.push_back(id);
-        }
-    });
-    for (const auto& id : expired_reservations)
-    {
-        auto* res = reservations_.Find(id);
-        if (res != nullptr)
-        {
-            auto* target = entries_.Find(res->key);
-            if (target != nullptr)
+        std::vector<std::string> expired_keys;
+        shard.entries.ForEach([&](const std::string& k, const Entry& e) {
+            if (expired_keys.size() < sample_limit && e.meta.IsExpired(now))
             {
-                try
-                {
-                    auto bal = std::stoull(target->value);
-                    bal += res->amount;
-                    target->value = std::to_string(bal);
-                }
-                catch (...)
-                {
-                    target->value = std::to_string(res->amount);
-                }
+                expired_keys.push_back(k);
             }
-            else
+        });
+        for (const auto& k : expired_keys)
+        {
+            shard.entries.Erase(k);
+        }
+
+        std::vector<std::string> expired_reservations;
+        shard.reservations.ForEach([&](const std::string& id, const Reservation& res) {
+            if (expired_reservations.size() < sample_limit && res.IsExpired(now))
             {
-                Entry entry{res->key, std::to_string(res->amount), EntryMetadata{DataType::String, now, 0}};
-                entries_.Insert(res->key, std::move(entry));
+                expired_reservations.push_back(id);
             }
-            reservations_.Erase(id);
-        }
-    }
-
-    std::vector<std::string> expired_idempotencies;
-    idempotency_records_.ForEach([&](const std::string& k, const IdempotencyRecord& rec) {
-        if (expired_idempotencies.size() < sample_limit && rec.IsExpired(now))
+        });
+        for (const auto& id : expired_reservations)
         {
-            expired_idempotencies.push_back(k);
+            auto* res = shard.reservations.Find(id);
+            if (res != nullptr)
+            {
+                auto* target = shard.entries.Find(res->key);
+                if (target != nullptr)
+                {
+                    try
+                    {
+                        auto bal = std::stoull(target->value);
+                        bal += res->amount;
+                        target->value = std::to_string(bal);
+                    }
+                    catch (...)
+                    {
+                        target->value = std::to_string(res->amount);
+                    }
+                }
+                else
+                {
+                    Entry entry{res->key, std::to_string(res->amount), EntryMetadata{DataType::String, now, 0}};
+                    shard.entries.Insert(res->key, std::move(entry));
+                }
+                shard.reservations.Erase(id);
+            }
         }
-    });
-    for (const auto& k : expired_idempotencies)
-    {
-        idempotency_records_.Erase(k);
-    }
 
-    std::vector<std::string> expired_rate_limits;
-    rate_limits_.ForEach([&](const std::string& k, const RateLimitRecord& rec) {
-        if (expired_rate_limits.size() < sample_limit && rec.IsExpired(now))
+        std::vector<std::string> expired_idempotencies;
+        shard.idempotency_records.ForEach([&](const std::string& k, const IdempotencyRecord& rec) {
+            if (expired_idempotencies.size() < sample_limit && rec.IsExpired(now))
+            {
+                expired_idempotencies.push_back(k);
+            }
+        });
+        for (const auto& k : expired_idempotencies)
         {
-            expired_rate_limits.push_back(k);
+            shard.idempotency_records.Erase(k);
         }
-    });
-    for (const auto& k : expired_rate_limits)
-    {
-        rate_limits_.Erase(k);
+
+        std::vector<std::string> expired_rate_limits;
+        shard.rate_limits.ForEach([&](const std::string& k, const RateLimitRecord& rec) {
+            if (expired_rate_limits.size() < sample_limit && rec.IsExpired(now))
+            {
+                expired_rate_limits.push_back(k);
+            }
+        });
+        for (const auto& k : expired_rate_limits)
+        {
+            shard.rate_limits.Erase(k);
+        }
+
+        total_purged += expired_keys.size() + expired_reservations.size() + expired_idempotencies.size() + expired_rate_limits.size();
     }
 
-    return expired_keys.size() + expired_reservations.size() + expired_idempotencies.size() + expired_rate_limits.size();
+    return total_purged;
 }
 
 }

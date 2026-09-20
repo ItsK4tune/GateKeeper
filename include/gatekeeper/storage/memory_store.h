@@ -4,6 +4,8 @@
 #include "gatekeeper/storage/hash_table.h"
 #include "gatekeeper/storage/store.h"
 
+#include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -16,9 +18,20 @@
 namespace gatekeeper::storage
 {
 
+struct StorageShard
+{
+    mutable std::mutex mutex;
+    HashTable<std::string, Entry> entries;
+    HashTable<std::string, RateLimitRecord> rate_limits;
+    HashTable<std::string, Reservation> reservations;
+    HashTable<std::string, IdempotencyRecord> idempotency_records;
+};
+
 class MemoryStore final : public Store
 {
 public:
+    static constexpr std::size_t kNumShards = 64;
+
     bool Set(std::string key, std::string value, WriteCondition condition, std::uint64_t ttl_ms = 0) override;
     std::optional<std::string> Get(std::string_view key) const override;
 
@@ -48,13 +61,11 @@ public:
     std::optional<IdempotencyRecord> IdemGet(std::string_view key) const override;
 
 private:
-    mutable std::mutex mutex_;
-    mutable HashTable<std::string, Entry> entries_;
-    mutable HashTable<std::string, RateLimitRecord> rate_limits_;
-    mutable HashTable<std::string, Reservation> reservations_;
-    mutable HashTable<std::string, IdempotencyRecord> idempotency_records_;
-    mutable std::uint64_t next_reservation_seq_{1};
-    mutable std::uint64_t next_idempotency_seq_{1};
+    StorageShard& GetShard(std::string_view key) const noexcept;
+
+    mutable std::array<StorageShard, kNumShards> shards_;
+    mutable std::atomic<std::uint64_t> next_reservation_seq_{1};
+    mutable std::atomic<std::uint64_t> next_idempotency_seq_{1};
 };
 
 }
