@@ -85,12 +85,12 @@ public:
 
     std::pair<Value*, bool> Insert(Key key, Value value)
     {
-        if (static_cast<float>(size_ + 1) > static_cast<float>(buckets_.size()) * max_load_factor_)
+        if (buckets_.empty())
         {
-            Resize(buckets_.size() * 2);
+            Resize(8);
         }
 
-        const auto bucket_index = HashKey(key);
+        auto bucket_index = HashKey(key);
         Node* curr = buckets_[bucket_index];
         while (curr != nullptr)
         {
@@ -100,6 +100,12 @@ public:
                 return {&curr->value, false};
             }
             curr = curr->next;
+        }
+
+        if (static_cast<float>(size_ + 1) > static_cast<float>(buckets_.size()) * max_load_factor_)
+        {
+            Resize(buckets_.size() * 2);
+            bucket_index = HashKey(key);
         }
 
         auto* new_node = new Node{std::move(key), std::move(value), buckets_[bucket_index]};
