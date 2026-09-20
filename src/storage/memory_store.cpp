@@ -1096,15 +1096,15 @@ LockExtendResult MemoryStore::LockExtend(
 {
     if (resource.empty())
     {
-        return {false, false, 0, "INVALID_ARGUMENTS", "resource must not be empty"};
+        return {false, false, 0, 0, "INVALID_ARGUMENTS", "resource must not be empty"};
     }
     if (owner_token.empty())
     {
-        return {false, false, 0, "INVALID_ARGUMENTS", "owner_token must not be empty"};
+        return {false, false, 0, 0, "INVALID_ARGUMENTS", "owner_token must not be empty"};
     }
     if (ttl_ms == 0)
     {
-        return {false, false, 0, "INVALID_ARGUMENTS", "ttl_ms must be greater than zero"};
+        return {false, false, 0, 0, "INVALID_ARGUMENTS", "ttl_ms must be greater than zero"};
     }
 
     auto& shard = GetShard(resource);
@@ -1132,16 +1132,16 @@ LockExtendResult MemoryStore::LockExtend(
     }
     shard.locks.Erase(res_str);
         }
-        return {false, false, 0, "LOCK_NOT_FOUND", "Lock does not exist or has expired"};
+        return {false, false, 0, 0, "LOCK_NOT_FOUND", "Lock does not exist or has expired"};
     }
 
     if (existing->owner_token != owner_token)
     {
-        return {false, false, 0, "ERR_LOCK_TOKEN_MISMATCH", "Owner token mismatch"};
+        return {false, false, 0, 0, "ERR_LOCK_TOKEN_MISMATCH", "Owner token mismatch"};
     }
 
     existing->expire_at_ms = now + ttl_ms;
-    return {true, true, ttl_ms, {}, {}};
+    return {true, true, existing->fencing_token, ttl_ms, {}, {}};
 }
 
 std::optional<LockRecord> MemoryStore::LockGet(std::string_view resource) const

@@ -210,6 +210,7 @@ struct LockExtendResult
 {
     bool ok{true};
     bool extended{false};
+    std::uint64_t fencing_token{0};
     std::uint64_t ttl_remaining_ms{0};
     std::string error_code;
     std::string error_message;

@@ -199,7 +199,7 @@ Result LockExtend(const protocol::Request& request, storage::Store& store)
         return Result{false, {}, {result.error_code, result.error_message}};
     }
 
-    std::string body = "{\"extended\":true,\"ttl_remaining_ms\":" + std::to_string(result.ttl_remaining_ms) + "}";
+    std::string body = "{\"extended\":true,\"fencing_token\":" + std::to_string(result.fencing_token) + ",\"ttl_remaining_ms\":" + std::to_string(result.ttl_remaining_ms) + "}";
     return Result{true, std::move(body), {}};
 }
 

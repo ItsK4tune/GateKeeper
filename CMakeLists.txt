@@ -137,6 +137,11 @@ if(BUILD_TESTING)
     add_test(NAME lock_state_tests COMMAND lock_state_tests)
 
     
+    
+    add_executable(fencing_token_tests tests/domain/lock/fencing_token_test.cpp)
+    target_link_libraries(fencing_token_tests PRIVATE gk_commands)
+    add_test(NAME fencing_token_tests COMMAND fencing_token_tests)
+
     add_executable(lock_wait_queue_tests tests/domain/lock/lock_wait_queue_test.cpp)
     target_link_libraries(lock_wait_queue_tests PRIVATE gk_commands)
     add_test(NAME lock_wait_queue_tests COMMAND lock_wait_queue_tests)
@@ -225,6 +230,11 @@ if(BUILD_TESTING)
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/concurrency_rate_limit_test.py
                     $<TARGET_FILE:gatekeeper>)
 
+            
+            add_test(NAME invoice_simulation_tests
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/invoice_simulation_test.py
+                    $<TARGET_FILE:gatekeeper>)
+
             add_test(NAME ephemeral_lock_tests
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/ephemeral_lock_test.py
                     $<TARGET_FILE:gatekeeper>)
@@ -241,7 +251,7 @@ if(BUILD_TESTING)
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/stress/idempotency_recovery_test.py
                     $<TARGET_FILE:gatekeeper>)
 
-            set_tests_properties(cli_integration_tests network_error_tests service_port_tests http_api_tests concurrency_rate_limit_tests auto_rollback_tests ephemeral_lock_tests idempotency_coalescing_tests idempotency_recovery_tests PROPERTIES TIMEOUT 30)
+            set_tests_properties(cli_integration_tests network_error_tests service_port_tests http_api_tests concurrency_rate_limit_tests auto_rollback_tests ephemeral_lock_tests invoice_simulation_tests idempotency_coalescing_tests idempotency_recovery_tests PROPERTIES TIMEOUT 30)
         endif()
     endif()
 endif()
