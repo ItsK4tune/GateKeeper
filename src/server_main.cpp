@@ -7,9 +7,24 @@
 #include "gatekeeper/storage/aof/aof_writer.h"
 #include "gatekeeper/storage/aof/aof_loader.h"
 
+#include <atomic>
+#include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <string>
+
+namespace
+{
+std::atomic<gatekeeper::net::Server*> g_server{nullptr};
+
+extern "C" void HandleSignal(int /*signum*/)
+{
+    if (auto* s = g_server.load())
+    {
+        s->Stop();
+    }
+}
+}
 
 int main(int argc, char* argv[])
 {
@@ -74,7 +89,23 @@ int main(int argc, char* argv[])
                 return http_service.Handle(req);
             },
             config.workers);
+
+        g_server.store(&server);
+        struct sigaction sa{};
+        sa.sa_handler = HandleSignal;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGINT, &sa, nullptr);
+        sigaction(SIGTERM, &sa, nullptr);
+
         server.Run();
+
+        g_server.store(nullptr);
+        if (aof_writer)
+        {
+            aof_writer->Close();
+        }
+        logger->Info("GateKeeper server gracefully stopped.");
     }
     catch (const std::exception& error)
     {

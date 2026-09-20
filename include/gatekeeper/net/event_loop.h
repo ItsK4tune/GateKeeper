@@ -32,12 +32,14 @@ public:
 
     void Run();
     void RunOnce(int timeout_ms = -1);
+    void Wakeup();
     void Stop();
 
     [[nodiscard]] bool IsRunning() const noexcept { return running_; }
 
 private:
     int epoll_fd_{-1};
+    int wakeup_fd_{-1};
     bool running_{false};
     int timer_interval_ms_{-1};
     TimerCallback timer_callback_;

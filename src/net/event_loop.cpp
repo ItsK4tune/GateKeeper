@@ -1,4 +1,4 @@
-﻿#include "gatekeeper/net/event_loop.h"
+#include "gatekeeper/net/event_loop.h"
 
 #include <algorithm>
 #include <array>
@@ -6,6 +6,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 
 namespace gatekeeper::net
@@ -18,10 +19,23 @@ EventLoop::EventLoop()
     {
         throw std::runtime_error("epoll_create1 failed");
     }
+    wakeup_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (wakeup_fd_ != -1)
+    {
+        Add(wakeup_fd_, EPOLLIN, [this](std::uint32_t) {
+            std::uint64_t val = 0;
+            const auto r = read(wakeup_fd_, &val, sizeof(val));
+            (void)r;
+        });
+    }
 }
 
 EventLoop::~EventLoop()
 {
+    if (wakeup_fd_ != -1)
+    {
+        close(wakeup_fd_);
+    }
     if (epoll_fd_ != -1)
     {
         close(epoll_fd_);
@@ -137,9 +151,20 @@ void EventLoop::RunOnce(int timeout_ms)
     }
 }
 
+void EventLoop::Wakeup()
+{
+    if (wakeup_fd_ != -1)
+    {
+        std::uint64_t one = 1;
+        const auto w = write(wakeup_fd_, &one, sizeof(one));
+        (void)w;
+    }
+}
+
 void EventLoop::Stop()
 {
     running_ = false;
+    Wakeup();
 }
 
 }
