@@ -8,6 +8,12 @@ namespace gatekeeper::protocol::gkwp2
 
 bool Decoder::Push(std::span<const std::uint8_t> incoming, std::vector<Frame>& out_frames, std::string& err_msg)
 {
+    if (buffer_.size() + incoming.size() > kMaxDecoderBufferSize)
+    {
+        err_msg = "Incoming buffer limit exceeded";
+        return false;
+    }
+
     buffer_.insert(buffer_.end(), incoming.begin(), incoming.end());
 
     while (buffer_.size() - read_offset_ >= kHeaderSize)

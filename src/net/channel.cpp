@@ -141,6 +141,14 @@ void Channel::Send(std::span<const std::uint8_t> data)
             return;
         }
     }
+
+    if (write_buffer_.size() - write_offset_ + data.size() > kMaxWriteBufferSize)
+    {
+        logger_->Error("Write buffer limit exceeded for fd=" + std::to_string(fd_) + "; closing connection");
+        Close();
+        return;
+    }
+
     write_buffer_.insert(write_buffer_.end(), data.begin(), data.end());
     loop_.Modify(fd_, EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLERR);
 }

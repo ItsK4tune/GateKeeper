@@ -18,6 +18,8 @@ namespace gatekeeper::net
 class Channel
 {
 public:
+    static constexpr std::size_t kMaxWriteBufferSize = 64 * 1024 * 1024;
+
     Channel(int fd, EventLoop& loop, RequestHandler handler, std::shared_ptr<log::Logger> logger = log::Logger::Null(), std::uint64_t session_id = 0, std::string address = "");
     ~Channel();
 

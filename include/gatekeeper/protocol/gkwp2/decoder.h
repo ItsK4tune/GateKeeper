@@ -14,6 +14,8 @@ namespace gatekeeper::protocol::gkwp2
 class Decoder
 {
 public:
+    static constexpr std::size_t kMaxDecoderBufferSize = 16 * 1024 * 1024;
+
     Decoder() = default;
 
     bool Push(std::span<const std::uint8_t> incoming, std::vector<Frame>& out_frames, std::string& err_msg);
