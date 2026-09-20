@@ -169,4 +169,50 @@ struct IdempotencyFailResult
     std::string error_message;
 };
 
+
+struct LockRecord
+{
+    std::string resource;
+    std::string owner_token;
+    std::uint64_t fencing_token{0};
+    std::uint64_t created_at_ms{0};
+    std::uint64_t expire_at_ms{0};
+    std::uint64_t session_id{0};
+    bool is_ephemeral{false};
+
+    [[nodiscard]] bool IsExpired(std::uint64_t now_ms) const noexcept
+    {
+        return expire_at_ms > 0 && now_ms >= expire_at_ms;
+    }
+};
+
+struct LockAcquireResult
+{
+    bool ok{true};
+    bool acquired{false};
+    std::string resource;
+    std::string owner_token;
+    std::uint64_t fencing_token{0};
+    std::uint64_t ttl_remaining_ms{0};
+    std::string error_code;
+    std::string error_message;
+};
+
+struct LockReleaseResult
+{
+    bool ok{true};
+    bool released{false};
+    std::string error_code;
+    std::string error_message;
+};
+
+struct LockExtendResult
+{
+    bool ok{true};
+    bool extended{false};
+    std::uint64_t ttl_remaining_ms{0};
+    std::string error_code;
+    std::string error_message;
+};
+
 }

@@ -1,3 +1,4 @@
+#include "gatekeeper/domain/lock/lock_ops.h"
 #include "gatekeeper/storage/aof/aof_writer.h"
 #include "gatekeeper/domain/idempotency/idempotency_ops.h"
 #include "gatekeeper/command/dispatcher.h"
@@ -19,7 +20,7 @@ bool IsWriteOp(std::string_view op)
 {
     return op == "SET" || op == "DEL" || op == "EXPIRE" || op == "PEXPIRE" || op == "PERSIST" ||
            op == "GK.RATE_LIMIT" || op == "GK.RESERVE" || op == "GK.COMMIT" || op == "GK.ROLLBACK" ||
-           op == "GK.QUOTA_INIT" || op == "GK.IDEM_BEGIN" || op == "GK.IDEM_COMPLETE" || op == "GK.IDEM_FAIL";
+           op == "GK.QUOTA_INIT" || op == "GK.IDEM_BEGIN" || op == "GK.IDEM_COMPLETE" || op == "GK.IDEM_FAIL" || op == "GK.LOCK_ACQUIRE" || op == "GK.LOCK_RELEASE" || op == "GK.LOCK_EXTEND";
 }
 }
 
@@ -45,6 +46,7 @@ Dispatcher::Dispatcher(std::unique_ptr<storage::Store> store)
     RegisterCounterOps(*this, *store_);
     RegisterReservationOps(*this, *store_);
     RegisterIdempotencyOps(*this, *store_);
+    RegisterLockOps(*this, *store_);
 }
 
 Dispatcher::~Dispatcher() = default;

@@ -52,6 +52,11 @@ public:
     virtual IdempotencyCompleteResult IdemComplete(std::string_view key, std::string_view owner_token, int response_code, std::string_view response_body) = 0;
     virtual IdempotencyFailResult IdemFail(std::string_view key, std::string_view owner_token, std::string_view error_message) = 0;
     virtual std::optional<IdempotencyRecord> IdemGet(std::string_view key) const = 0;
+
+    virtual LockAcquireResult LockAcquire(std::string_view resource, std::uint64_t ttl_ms, std::string_view owner_token = "", std::uint64_t session_id = 0, bool is_ephemeral = false) = 0;
+    virtual LockReleaseResult LockRelease(std::string_view resource, std::string_view owner_token) = 0;
+    virtual LockExtendResult LockExtend(std::string_view resource, std::string_view owner_token, std::uint64_t ttl_ms) = 0;
+    virtual std::optional<LockRecord> LockGet(std::string_view resource) const = 0;
 };
 
 }

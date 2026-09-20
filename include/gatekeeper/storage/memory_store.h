@@ -25,6 +25,7 @@ struct StorageShard
     HashTable<std::string, RateLimitRecord> rate_limits;
     HashTable<std::string, Reservation> reservations;
     HashTable<std::string, IdempotencyRecord> idempotency_records;
+    HashTable<std::string, LockRecord> locks;
 };
 
 class MemoryStore final : public Store
@@ -60,12 +61,19 @@ public:
     IdempotencyFailResult IdemFail(std::string_view key, std::string_view owner_token, std::string_view error_message) override;
     std::optional<IdempotencyRecord> IdemGet(std::string_view key) const override;
 
+    LockAcquireResult LockAcquire(std::string_view resource, std::uint64_t ttl_ms, std::string_view owner_token = "", std::uint64_t session_id = 0, bool is_ephemeral = false) override;
+    LockReleaseResult LockRelease(std::string_view resource, std::string_view owner_token) override;
+    LockExtendResult LockExtend(std::string_view resource, std::string_view owner_token, std::uint64_t ttl_ms) override;
+    std::optional<LockRecord> LockGet(std::string_view resource) const override;
+
 private:
     StorageShard& GetShard(std::string_view key) const noexcept;
 
     mutable std::array<StorageShard, kNumShards> shards_;
     mutable std::atomic<std::uint64_t> next_reservation_seq_{1};
     mutable std::atomic<std::uint64_t> next_idempotency_seq_{1};
+    mutable std::atomic<std::uint64_t> next_lock_seq_{1};
+    mutable std::atomic<std::uint64_t> next_fencing_token_{1001};
 };
 
 }

@@ -53,6 +53,7 @@ gatekeeper_library(gk_domain
     src/domain/quota/reservation_ops.cpp
     src/domain/idempotency/idempotency_ops.cpp
     src/domain/idempotency/parking_lot.cpp
+    src/domain/lock/lock_ops.cpp
 )
 target_link_libraries(gk_domain PUBLIC gk_protocol gk_command_names gk_storage)
 
@@ -127,6 +128,16 @@ if(BUILD_TESTING)
     add_executable(idempotency_commands_tests tests/domain/idempotency/idempotency_commands_test.cpp)
     target_link_libraries(idempotency_commands_tests PRIVATE gk_commands)
     add_test(NAME idempotency_commands_tests COMMAND idempotency_commands_tests)
+
+    
+    
+    add_executable(lock_state_tests tests/domain/lock/lock_state_test.cpp)
+    target_link_libraries(lock_state_tests PRIVATE gk_storage)
+    add_test(NAME lock_state_tests COMMAND lock_state_tests)
+
+    add_executable(lock_commands_tests tests/domain/lock/lock_commands_test.cpp)
+    target_link_libraries(lock_commands_tests PRIVATE gk_commands)
+    add_test(NAME lock_commands_tests COMMAND lock_commands_tests)
 
     add_executable(parking_lot_tests tests/domain/idempotency/parking_lot_test.cpp)
     target_link_libraries(parking_lot_tests PRIVATE gk_domain)

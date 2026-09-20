@@ -937,10 +937,170 @@ std::size_t MemoryStore::PurgeExpired(std::size_t sample_limit)
             shard.rate_limits.Erase(k);
         }
 
-        total_purged += expired_keys.size() + expired_reservations.size() + expired_idempotencies.size() + expired_rate_limits.size();
+        std::vector<std::string> expired_locks;
+        shard.locks.ForEach([&](const std::string& r, const LockRecord& l) {
+            if (expired_locks.size() < sample_limit && l.IsExpired(now))
+            {
+                expired_locks.push_back(r);
+            }
+        });
+        for (const auto& r : expired_locks)
+        {
+            shard.locks.Erase(r);
+        }
+
+        total_purged += expired_keys.size() + expired_reservations.size() + expired_idempotencies.size() + expired_rate_limits.size() + expired_locks.size();
     }
 
     return total_purged;
+}
+
+
+LockAcquireResult MemoryStore::LockAcquire(
+    std::string_view resource,
+    std::uint64_t ttl_ms,
+    std::string_view owner_token,
+    std::uint64_t session_id,
+    bool is_ephemeral)
+{
+    if (resource.empty())
+    {
+        return {false, false, "", "", 0, 0, "INVALID_ARGUMENTS", "resource must not be empty"};
+    }
+    if (ttl_ms == 0)
+    {
+        return {false, false, std::string(resource), "", 0, 0, "INVALID_ARGUMENTS", "ttl_ms must be greater than zero"};
+    }
+
+    auto& shard = GetShard(resource);
+    const std::lock_guard lock(shard.mutex);
+    const auto now = CurrentTimeMs();
+    const auto res_str = std::string(resource);
+
+    auto* existing = shard.locks.Find(res_str);
+    if (existing != nullptr && existing->IsExpired(now))
+    {
+        shard.locks.Erase(res_str);
+        existing = nullptr;
+    }
+
+    if (existing != nullptr)
+    {
+        const auto remaining = existing->expire_at_ms > now ? (existing->expire_at_ms - now) : 0;
+        return {true, false, res_str, "", existing->fencing_token, remaining, "LOCK_HELD", "Lock is already held by another client"};
+    }
+
+    const std::string token = owner_token.empty()
+        ? ("lock_" + std::to_string(now) + "_" + std::to_string(next_lock_seq_++))
+        : std::string(owner_token);
+
+    const std::uint64_t fencing = next_fencing_token_++;
+
+    LockRecord rec;
+    rec.resource = res_str;
+    rec.owner_token = token;
+    rec.fencing_token = fencing;
+    rec.created_at_ms = now;
+    rec.expire_at_ms = now + ttl_ms;
+    rec.session_id = session_id;
+    rec.is_ephemeral = is_ephemeral;
+
+    shard.locks.Insert(res_str, std::move(rec));
+    return {true, true, res_str, token, fencing, ttl_ms, {}, {}};
+}
+
+LockReleaseResult MemoryStore::LockRelease(
+    std::string_view resource,
+    std::string_view owner_token)
+{
+    if (resource.empty())
+    {
+        return {false, false, "INVALID_ARGUMENTS", "resource must not be empty"};
+    }
+    if (owner_token.empty())
+    {
+        return {false, false, "INVALID_ARGUMENTS", "owner_token must not be empty"};
+    }
+
+    auto& shard = GetShard(resource);
+    const std::lock_guard lock(shard.mutex);
+    const auto now = CurrentTimeMs();
+    const auto res_str = std::string(resource);
+
+    auto* existing = shard.locks.Find(res_str);
+    if (existing == nullptr || existing->IsExpired(now))
+    {
+        if (existing != nullptr)
+        {
+            shard.locks.Erase(res_str);
+        }
+        return {false, false, "LOCK_NOT_FOUND", "Lock does not exist or has expired"};
+    }
+
+    if (existing->owner_token != owner_token)
+    {
+        return {false, false, "ERR_LOCK_TOKEN_MISMATCH", "Owner token mismatch"};
+    }
+
+    shard.locks.Erase(res_str);
+    return {true, true, {}, {}};
+}
+
+LockExtendResult MemoryStore::LockExtend(
+    std::string_view resource,
+    std::string_view owner_token,
+    std::uint64_t ttl_ms)
+{
+    if (resource.empty())
+    {
+        return {false, false, 0, "INVALID_ARGUMENTS", "resource must not be empty"};
+    }
+    if (owner_token.empty())
+    {
+        return {false, false, 0, "INVALID_ARGUMENTS", "owner_token must not be empty"};
+    }
+    if (ttl_ms == 0)
+    {
+        return {false, false, 0, "INVALID_ARGUMENTS", "ttl_ms must be greater than zero"};
+    }
+
+    auto& shard = GetShard(resource);
+    const std::lock_guard lock(shard.mutex);
+    const auto now = CurrentTimeMs();
+    const auto res_str = std::string(resource);
+
+    auto* existing = shard.locks.Find(res_str);
+    if (existing == nullptr || existing->IsExpired(now))
+    {
+        if (existing != nullptr)
+        {
+            shard.locks.Erase(res_str);
+        }
+        return {false, false, 0, "LOCK_NOT_FOUND", "Lock does not exist or has expired"};
+    }
+
+    if (existing->owner_token != owner_token)
+    {
+        return {false, false, 0, "ERR_LOCK_TOKEN_MISMATCH", "Owner token mismatch"};
+    }
+
+    existing->expire_at_ms = now + ttl_ms;
+    return {true, true, ttl_ms, {}, {}};
+}
+
+std::optional<LockRecord> MemoryStore::LockGet(std::string_view resource) const
+{
+    auto& shard = GetShard(resource);
+    const std::lock_guard lock(shard.mutex);
+    const auto now = CurrentTimeMs();
+    const auto res_str = std::string(resource);
+
+    auto* existing = shard.locks.Find(res_str);
+    if (existing == nullptr || existing->IsExpired(now))
+    {
+        return std::nullopt;
+    }
+    return *existing;
 }
 
 }
