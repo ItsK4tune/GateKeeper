@@ -50,7 +50,7 @@ int main(int argc, char* argv[])
 
         gatekeeper::service::Processor processor([&dispatcher](const auto& request) {
             return dispatcher.Dispatch(request);
-        }, logger);
+        }, logger, &dispatcher.GetStore());
         gatekeeper::service::HttpService http_service(dispatcher.GetStore(), logger, aof_writer);
 
         gatekeeper::net::Server server(

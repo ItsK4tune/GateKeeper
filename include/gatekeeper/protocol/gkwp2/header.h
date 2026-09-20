@@ -24,6 +24,7 @@ inline constexpr std::uint8_t kEncrypted = 0x02;
 inline constexpr std::uint8_t kMoreFragments = 0x04;
 inline constexpr std::uint8_t kEndStream = 0x08;
 inline constexpr std::uint8_t kResetStream = 0x10;
+inline constexpr std::uint8_t kBinaryPayload = 0x20;
 }
 
 #pragma pack(push, 1)
