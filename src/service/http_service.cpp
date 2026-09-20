@@ -1,3 +1,4 @@
+#include "gatekeeper/domain/lock/lock_wait_queue.h"
 #include "gatekeeper/storage/aof/aof_writer.h"
 #include "gatekeeper/service/http_service.h"
 #include "gatekeeper/protocol/json_reader.h"
@@ -121,7 +122,23 @@ net::HttpResponse HttpService::Handle(const net::HttpRequest& req)
     {
         return HandleIdempotencyFail(req);
     }
-    if (req.method == "POST" && req.path == "/v1/kv/set")
+        if (req.method == "POST" && req.path == "/v1/lock/acquire")
+    {
+        return HandleLockAcquire(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/lock/release")
+    {
+        return HandleLockRelease(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/lock/extend")
+    {
+        return HandleLockExtend(req);
+    }
+    if (req.method == "POST" && req.path == "/v1/lock/wait")
+    {
+        return HandleLockWait(req);
+    }
+if (req.method == "POST" && req.path == "/v1/kv/set")
     {
         return HandleKvSet(req);
     }
@@ -1447,6 +1464,277 @@ net::HttpResponse HttpService::BadRequest(const std::string& message)
     resp.status_code = 400;
     resp.status_text = "Bad Request";
     resp.body = "{\"error\":\"INVALID_ARGUMENTS\",\"message\":\"" + message + "\"}";
+    return resp;
+}
+
+
+net::HttpResponse HttpService::HandleLockAcquire(const net::HttpRequest& req)
+{
+    if (req.body.empty()) return BadRequest("missing JSON body");
+
+    std::string resource;
+    std::uint64_t ttl_ms = 30000;
+    std::string owner_token;
+    bool ephemeral = false;
+    std::uint64_t session_id = 0;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "resource" || field == "key") resource = reader.String();
+            else if (field == "ttl_ms") ttl_ms = reader.UnsignedNumber();
+            else if (field == "ttl_seconds") ttl_ms = reader.UnsignedNumber() * 1000;
+            else if (field == "owner_token") owner_token = reader.String();
+            else if (field == "session_id") session_id = reader.UnsignedNumber();
+            else if (field == "ephemeral") ephemeral = reader.Boolean();
+            else throw std::invalid_argument("unsupported field: " + field);
+
+            if (reader.Take('}')) break;
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (resource.empty()) return BadRequest("resource must not be empty");
+
+    auto res = store_.LockAcquire(resource, ttl_ms, owner_token, session_id, ephemeral);
+    if (!res.ok)
+    {
+        net::HttpResponse err_resp;
+        err_resp.status_code = 400;
+        err_resp.status_text = "Bad Request";
+        err_resp.body = "{\"error\":" + protocol::QuoteJson(res.error_code) + ",\"message\":" + protocol::QuoteJson(res.error_message) + "}";
+        return err_resp;
+    }
+
+    if (aof_writer_ && res.acquired)
+    {
+        aof_writer_->Append("GK.LOCK_ACQUIRE", "{\"resource\":" + protocol::QuoteJson(resource) +
+            ",\"ttl_ms\":" + std::to_string(ttl_ms) + ",\"owner_token\":" + protocol::QuoteJson(res.owner_token) + "}");
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = res.acquired ? 200 : 409;
+    resp.status_text = res.acquired ? "OK" : "Conflict";
+    resp.body = std::string("{\"acquired\":") + (res.acquired ? "true" : "false");
+    resp.body += ",\"resource\":" + protocol::QuoteJson(res.resource);
+    if (res.acquired)
+    {
+        resp.body += ",\"owner_token\":" + protocol::QuoteJson(res.owner_token);
+        resp.body += ",\"fencing_token\":" + std::to_string(res.fencing_token);
+        resp.body += ",\"ttl_remaining_ms\":" + std::to_string(res.ttl_remaining_ms);
+    }
+    else
+    {
+        resp.body += ",\"error_code\":" + protocol::QuoteJson(res.error_code);
+        resp.body += ",\"ttl_remaining_ms\":" + std::to_string(res.ttl_remaining_ms);
+    }
+    resp.body += "}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleLockRelease(const net::HttpRequest& req)
+{
+    if (req.body.empty()) return BadRequest("missing JSON body");
+
+    std::string resource;
+    std::string owner_token;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "resource" || field == "key") resource = reader.String();
+            else if (field == "owner_token") owner_token = reader.String();
+            else throw std::invalid_argument("unsupported field: " + field);
+
+            if (reader.Take('}')) break;
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (resource.empty() || owner_token.empty()) return BadRequest("resource and owner_token are required");
+
+    auto res = store_.LockRelease(resource, owner_token);
+    if (!res.ok)
+    {
+        net::HttpResponse err_resp;
+        err_resp.status_code = res.error_code == "LOCK_NOT_FOUND" ? 404 : 403;
+        err_resp.status_text = res.error_code == "LOCK_NOT_FOUND" ? "Not Found" : "Forbidden";
+        err_resp.body = "{\"error\":" + protocol::QuoteJson(res.error_code) + ",\"message\":" + protocol::QuoteJson(res.error_message) + "}";
+        return err_resp;
+    }
+
+    if (aof_writer_)
+    {
+        aof_writer_->Append("GK.LOCK_RELEASE", "{\"resource\":" + protocol::QuoteJson(resource) +
+            ",\"owner_token\":" + protocol::QuoteJson(owner_token) + "}");
+    }
+
+    domain::lock::GetGlobalLockWaitQueue().WakeNext(store_, resource);
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"released\":true}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleLockExtend(const net::HttpRequest& req)
+{
+    if (req.body.empty()) return BadRequest("missing JSON body");
+
+    std::string resource;
+    std::string owner_token;
+    std::uint64_t ttl_ms = 30000;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "resource" || field == "key") resource = reader.String();
+            else if (field == "owner_token") owner_token = reader.String();
+            else if (field == "ttl_ms") ttl_ms = reader.UnsignedNumber();
+            else if (field == "ttl_seconds") ttl_ms = reader.UnsignedNumber() * 1000;
+            else throw std::invalid_argument("unsupported field: " + field);
+
+            if (reader.Take('}')) break;
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (resource.empty() || owner_token.empty()) return BadRequest("resource and owner_token are required");
+
+    auto res = store_.LockExtend(resource, owner_token, ttl_ms);
+    if (!res.ok)
+    {
+        net::HttpResponse err_resp;
+        err_resp.status_code = res.error_code == "LOCK_NOT_FOUND" ? 404 : 403;
+        err_resp.status_text = res.error_code == "LOCK_NOT_FOUND" ? "Not Found" : "Forbidden";
+        err_resp.body = "{\"error\":" + protocol::QuoteJson(res.error_code) + ",\"message\":" + protocol::QuoteJson(res.error_message) + "}";
+        return err_resp;
+    }
+
+    if (aof_writer_)
+    {
+        aof_writer_->Append("GK.LOCK_EXTEND", "{\"resource\":" + protocol::QuoteJson(resource) +
+            ",\"owner_token\":" + protocol::QuoteJson(owner_token) + ",\"ttl_ms\":" + std::to_string(ttl_ms) + "}");
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.body = "{\"extended\":true,\"fencing_token\":" + std::to_string(res.fencing_token) + ",\"ttl_remaining_ms\":" + std::to_string(res.ttl_remaining_ms) + "}";
+    return resp;
+}
+
+net::HttpResponse HttpService::HandleLockWait(const net::HttpRequest& req)
+{
+    if (req.body.empty()) return BadRequest("missing JSON body");
+
+    std::string resource;
+    std::uint64_t ttl_ms = 30000;
+    std::uint64_t max_wait_ms = 5000;
+    std::string owner_token;
+    bool ephemeral = false;
+    std::uint64_t session_id = 0;
+
+    try
+    {
+        protocol::JsonReader reader(req.body);
+        reader.Expect('{');
+        do
+        {
+            auto field = reader.String();
+            reader.Expect(':');
+            if (field == "resource" || field == "key") resource = reader.String();
+            else if (field == "ttl_ms") ttl_ms = reader.UnsignedNumber();
+            else if (field == "ttl_seconds") ttl_ms = reader.UnsignedNumber() * 1000;
+            else if (field == "max_wait_ms") max_wait_ms = reader.UnsignedNumber();
+            else if (field == "max_wait_seconds") max_wait_ms = reader.UnsignedNumber() * 1000;
+            else if (field == "owner_token") owner_token = reader.String();
+            else if (field == "session_id") session_id = reader.UnsignedNumber();
+            else if (field == "ephemeral") ephemeral = reader.Boolean();
+            else throw std::invalid_argument("unsupported field: " + field);
+
+            if (reader.Take('}')) break;
+            reader.Expect(',');
+        } while (true);
+        reader.End();
+    }
+    catch (const std::exception& ex)
+    {
+        return BadRequest(std::string("invalid JSON: ") + ex.what());
+    }
+
+    if (resource.empty()) return BadRequest("resource must not be empty");
+
+    auto res = domain::lock::GetGlobalLockWaitQueue().WaitOrAcquire(
+        store_, resource, ttl_ms, max_wait_ms, owner_token, session_id, ephemeral);
+
+    if (!res.ok && res.error_code == "ERR_LOCK_WAIT_TIMEOUT")
+    {
+        net::HttpResponse timeout_resp;
+        timeout_resp.status_code = 408;
+        timeout_resp.status_text = "Request Timeout";
+        timeout_resp.body = "{\"error\":\"ERR_LOCK_WAIT_TIMEOUT\",\"message\":" + protocol::QuoteJson(res.error_message) + "}";
+        return timeout_resp;
+    }
+
+    if (!res.ok)
+    {
+        net::HttpResponse err_resp;
+        err_resp.status_code = 400;
+        err_resp.status_text = "Bad Request";
+        err_resp.body = "{\"error\":" + protocol::QuoteJson(res.error_code) + ",\"message\":" + protocol::QuoteJson(res.error_message) + "}";
+        return err_resp;
+    }
+
+    if (aof_writer_ && res.acquired)
+    {
+        aof_writer_->Append("GK.LOCK_ACQUIRE", "{\"resource\":" + protocol::QuoteJson(resource) +
+            ",\"ttl_ms\":" + std::to_string(ttl_ms) + ",\"owner_token\":" + protocol::QuoteJson(res.owner_token) + "}");
+    }
+
+    net::HttpResponse resp;
+    resp.status_code = res.acquired ? 200 : 409;
+    resp.status_text = res.acquired ? "OK" : "Conflict";
+    resp.body = std::string("{\"acquired\":") + (res.acquired ? "true" : "false");
+    resp.body += ",\"resource\":" + protocol::QuoteJson(res.resource);
+    if (res.acquired)
+    {
+        resp.body += ",\"owner_token\":" + protocol::QuoteJson(res.owner_token);
+        resp.body += ",\"fencing_token\":" + std::to_string(res.fencing_token);
+        resp.body += ",\"ttl_remaining_ms\":" + std::to_string(res.ttl_remaining_ms);
+    }
+    resp.body += "}";
     return resp;
 }
 

@@ -12,6 +12,7 @@ const (
 	OpRateLimit OpType = "rate-limit"
 	OpSet       OpType = "set"
 	OpGet       OpType = "get"
+	OpLock      OpType = "lock-acquire"
 )
 
 type RequestConfig struct {

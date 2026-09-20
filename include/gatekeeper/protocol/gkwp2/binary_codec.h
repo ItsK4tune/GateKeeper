@@ -35,6 +35,10 @@ enum class BinaryOpcode : std::uint16_t
     IdemBegin = 0x0120,
     IdemComplete = 0x0121,
     IdemFail = 0x0122,
+    LockAcquire = 0x0130,
+    LockRelease = 0x0131,
+    LockExtend = 0x0132,
+    LockWait = 0x0133,
 };
 
 enum class BinaryStatus : std::uint8_t
@@ -330,6 +334,86 @@ public:
         out.append(owner_token);
         out.append(reinterpret_cast<const char*>(&mlen), 2);
         out.append(error_message);
+        return out;
+    }
+
+    static std::string EncodeLockAcquire(std::string_view resource, std::uint64_t ttl_ms, std::string_view owner_token = "", bool ephemeral = false, std::uint64_t session_id = 0)
+    {
+        std::string out;
+        out.reserve(2 + 2 + resource.size() + 8 + 2 + owner_token.size() + 1 + 8);
+        std::uint16_t op = htons(static_cast<std::uint16_t>(BinaryOpcode::LockAcquire));
+        std::uint16_t rlen = htons(static_cast<std::uint16_t>(resource.size()));
+        std::uint64_t ttl_net = htobe64(ttl_ms);
+        std::uint16_t olen = htons(static_cast<std::uint16_t>(owner_token.size()));
+        std::uint8_t eph = ephemeral ? 1 : 0;
+        std::uint64_t sess_net = htobe64(session_id);
+
+        out.append(reinterpret_cast<const char*>(&op), 2);
+        out.append(reinterpret_cast<const char*>(&rlen), 2);
+        out.append(resource);
+        out.append(reinterpret_cast<const char*>(&ttl_net), 8);
+        out.append(reinterpret_cast<const char*>(&olen), 2);
+        out.append(owner_token);
+        out.push_back(static_cast<char>(eph));
+        out.append(reinterpret_cast<const char*>(&sess_net), 8);
+        return out;
+    }
+
+    static std::string EncodeLockRelease(std::string_view resource, std::string_view owner_token)
+    {
+        std::string out;
+        out.reserve(2 + 2 + resource.size() + 2 + owner_token.size());
+        std::uint16_t op = htons(static_cast<std::uint16_t>(BinaryOpcode::LockRelease));
+        std::uint16_t rlen = htons(static_cast<std::uint16_t>(resource.size()));
+        std::uint16_t olen = htons(static_cast<std::uint16_t>(owner_token.size()));
+
+        out.append(reinterpret_cast<const char*>(&op), 2);
+        out.append(reinterpret_cast<const char*>(&rlen), 2);
+        out.append(resource);
+        out.append(reinterpret_cast<const char*>(&olen), 2);
+        out.append(owner_token);
+        return out;
+    }
+
+    static std::string EncodeLockExtend(std::string_view resource, std::string_view owner_token, std::uint64_t ttl_ms)
+    {
+        std::string out;
+        out.reserve(2 + 2 + resource.size() + 2 + owner_token.size() + 8);
+        std::uint16_t op = htons(static_cast<std::uint16_t>(BinaryOpcode::LockExtend));
+        std::uint16_t rlen = htons(static_cast<std::uint16_t>(resource.size()));
+        std::uint16_t olen = htons(static_cast<std::uint16_t>(owner_token.size()));
+        std::uint64_t ttl_net = htobe64(ttl_ms);
+
+        out.append(reinterpret_cast<const char*>(&op), 2);
+        out.append(reinterpret_cast<const char*>(&rlen), 2);
+        out.append(resource);
+        out.append(reinterpret_cast<const char*>(&olen), 2);
+        out.append(owner_token);
+        out.append(reinterpret_cast<const char*>(&ttl_net), 8);
+        return out;
+    }
+
+    static std::string EncodeLockWait(std::string_view resource, std::uint64_t ttl_ms, std::uint64_t max_wait_ms, std::string_view owner_token = "", bool ephemeral = false, std::uint64_t session_id = 0)
+    {
+        std::string out;
+        out.reserve(2 + 2 + resource.size() + 8 + 8 + 2 + owner_token.size() + 1 + 8);
+        std::uint16_t op = htons(static_cast<std::uint16_t>(BinaryOpcode::LockWait));
+        std::uint16_t rlen = htons(static_cast<std::uint16_t>(resource.size()));
+        std::uint64_t ttl_net = htobe64(ttl_ms);
+        std::uint64_t wait_net = htobe64(max_wait_ms);
+        std::uint16_t olen = htons(static_cast<std::uint16_t>(owner_token.size()));
+        std::uint8_t eph = ephemeral ? 1 : 0;
+        std::uint64_t sess_net = htobe64(session_id);
+
+        out.append(reinterpret_cast<const char*>(&op), 2);
+        out.append(reinterpret_cast<const char*>(&rlen), 2);
+        out.append(resource);
+        out.append(reinterpret_cast<const char*>(&ttl_net), 8);
+        out.append(reinterpret_cast<const char*>(&wait_net), 8);
+        out.append(reinterpret_cast<const char*>(&olen), 2);
+        out.append(owner_token);
+        out.push_back(static_cast<char>(eph));
+        out.append(reinterpret_cast<const char*>(&sess_net), 8);
         return out;
     }
 };

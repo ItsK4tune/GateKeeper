@@ -71,7 +71,7 @@ Result Dispatcher::Dispatch(const protocol::Request& request) const
     auto res = handler->second(request);
     if (res.ok && aof_writer_ && IsWriteOp(request.op))
     {
-        if (request.op == "GK.IDEM_BEGIN")
+        if (request.op == "GK.LOCK_ACQUIRE" || request.op == "GK.IDEM_BEGIN")
         {
             std::string aof_body = request.body_json;
             if (aof_body.find("\"owner_token\"") == std::string::npos)

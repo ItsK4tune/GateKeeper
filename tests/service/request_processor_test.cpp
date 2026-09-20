@@ -57,6 +57,28 @@ int main()
         const auto get2_resp = processor.Process(get_req);
         Require(!get2_resp.empty() && get2_resp[0] == static_cast<char>(gatekeeper::protocol::gkwp2::BinaryStatus::NotFound), "Get not NotFound");
 
+        
+        // 6. Test Binary Lock Operations (Step 18 & 19)
+        const auto lock_acq_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeLockAcquire("res:binary:1", 60000, "tok_bin_1");
+        const auto lock_acq_resp = processor.Process(lock_acq_req);
+        Require(!lock_acq_resp.empty() && lock_acq_resp[0] == 0, "LockAcquire failed");
+        Require(lock_acq_resp[1] == 1, "LockAcquire acquired != 1");
+
+        // Conflict
+        const auto lock_acq_req2 = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeLockAcquire("res:binary:1", 60000, "tok_bin_2");
+        const auto lock_acq_resp2 = processor.Process(lock_acq_req2);
+        Require(!lock_acq_resp2.empty() && lock_acq_resp2[1] == 0, "LockAcquire conflict should not be acquired");
+
+        // Extend
+        const auto lock_ext_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeLockExtend("res:binary:1", "tok_bin_1", 30000);
+        const auto lock_ext_resp = processor.Process(lock_ext_req);
+        Require(!lock_ext_resp.empty() && lock_ext_resp[0] == 0 && lock_ext_resp[1] == 1, "LockExtend failed");
+
+        // Release
+        const auto lock_rel_req = gatekeeper::protocol::gkwp2::BinaryCodec::EncodeLockRelease("res:binary:1", "tok_bin_1");
+        const auto lock_rel_resp = processor.Process(lock_rel_req);
+        Require(!lock_rel_resp.empty() && lock_rel_resp[0] == 0 && lock_rel_resp[1] == 1, "LockRelease failed");
+
         std::cout << "Binary request processor tests passed\n";
     }
     catch (const std::exception& error)

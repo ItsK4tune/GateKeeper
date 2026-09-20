@@ -1,3 +1,4 @@
+#include "gatekeeper/domain/lock/lock_wait_queue.h"
 #include "gatekeeper/service/processor.h"
 #include "gatekeeper/protocol/gkwp2/binary_codec.h"
 #include "gatekeeper/protocol/response.h"
@@ -580,7 +581,205 @@ std::string Processor::Process(std::string_view payload) const
         resp.push_back(1);
         return resp;
     }
-    default:
+        case protocol::gkwp2::BinaryOpcode::LockAcquire:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t rlen;
+        std::memcpy(&rlen, payload.data(), 2); rlen = ntohs(rlen); payload.remove_prefix(2);
+        if (payload.size() < rlen + 8 + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto resource = payload.substr(0, rlen); payload.remove_prefix(rlen);
+
+        std::uint64_t ttl_ms;
+        std::memcpy(&ttl_ms, payload.data(), 8); ttl_ms = be64toh(ttl_ms); payload.remove_prefix(8);
+
+        std::uint16_t olen;
+        std::memcpy(&olen, payload.data(), 2); olen = ntohs(olen); payload.remove_prefix(2);
+        std::string_view owner_token;
+        if (olen > 0 && payload.size() >= olen)
+        {
+            owner_token = payload.substr(0, olen);
+            payload.remove_prefix(olen);
+        }
+
+        bool ephemeral = false;
+        if (!payload.empty())
+        {
+            ephemeral = (payload[0] != 0);
+            payload.remove_prefix(1);
+        }
+
+        std::uint64_t session_id = 0;
+        if (payload.size() >= 8)
+        {
+            std::memcpy(&session_id, payload.data(), 8);
+            session_id = be64toh(session_id);
+            payload.remove_prefix(8);
+        }
+
+        const auto res = store_->LockAcquire(resource, ttl_ms, owner_token, session_id, ephemeral);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_ && res.acquired)
+        {
+            aof_writer_->Append("GK.LOCK_ACQUIRE", "{\"resource\":" + protocol::QuoteJson(resource) +
+                ",\"ttl_ms\":" + std::to_string(ttl_ms) + ",\"owner_token\":" + protocol::QuoteJson(res.owner_token) + "}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(res.acquired ? protocol::gkwp2::BinaryStatus::Ok : protocol::gkwp2::BinaryStatus::Conflict));
+        resp.push_back(res.acquired ? 1 : 0);
+
+        std::uint64_t fencing_net = htobe64(res.fencing_token);
+        resp.append(reinterpret_cast<const char*>(&fencing_net), 8);
+
+        std::uint64_t ttl_net = htobe64(res.ttl_remaining_ms);
+        resp.append(reinterpret_cast<const char*>(&ttl_net), 8);
+
+        std::uint16_t tok_len = htons(static_cast<std::uint16_t>(res.owner_token.size()));
+        resp.append(reinterpret_cast<const char*>(&tok_len), 2);
+        resp.append(res.owner_token);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::LockRelease:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t rlen;
+        std::memcpy(&rlen, payload.data(), 2); rlen = ntohs(rlen); payload.remove_prefix(2);
+        if (payload.size() < rlen + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto resource = payload.substr(0, rlen); payload.remove_prefix(rlen);
+
+        std::uint16_t olen;
+        std::memcpy(&olen, payload.data(), 2); olen = ntohs(olen); payload.remove_prefix(2);
+        if (payload.size() < olen) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto owner_token = payload.substr(0, olen);
+
+        const auto res = store_->LockRelease(resource, owner_token);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_)
+        {
+            aof_writer_->Append("GK.LOCK_RELEASE", "{\"resource\":" + protocol::QuoteJson(resource) +
+                ",\"owner_token\":" + protocol::QuoteJson(owner_token) + "}");
+        }
+
+        domain::lock::GetGlobalLockWaitQueue().WakeNext(*store_, resource);
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(1);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::LockExtend:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t rlen;
+        std::memcpy(&rlen, payload.data(), 2); rlen = ntohs(rlen); payload.remove_prefix(2);
+        if (payload.size() < rlen + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto resource = payload.substr(0, rlen); payload.remove_prefix(rlen);
+
+        std::uint16_t olen;
+        std::memcpy(&olen, payload.data(), 2); olen = ntohs(olen); payload.remove_prefix(2);
+        if (payload.size() < olen + 8) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto owner_token = payload.substr(0, olen); payload.remove_prefix(olen);
+
+        std::uint64_t ttl_ms;
+        std::memcpy(&ttl_ms, payload.data(), 8); ttl_ms = be64toh(ttl_ms);
+
+        const auto res = store_->LockExtend(resource, owner_token, ttl_ms);
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_)
+        {
+            aof_writer_->Append("GK.LOCK_EXTEND", "{\"resource\":" + protocol::QuoteJson(resource) +
+                ",\"owner_token\":" + protocol::QuoteJson(owner_token) + ",\"ttl_ms\":" + std::to_string(ttl_ms) + "}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(protocol::gkwp2::BinaryStatus::Ok));
+        resp.push_back(1);
+        std::uint64_t fencing_net = htobe64(res.fencing_token);
+        resp.append(reinterpret_cast<const char*>(&fencing_net), 8);
+        std::uint64_t ttl_net = htobe64(res.ttl_remaining_ms);
+        resp.append(reinterpret_cast<const char*>(&ttl_net), 8);
+        return resp;
+    }
+    case protocol::gkwp2::BinaryOpcode::LockWait:
+    {
+        if (payload.size() < 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        std::uint16_t rlen;
+        std::memcpy(&rlen, payload.data(), 2); rlen = ntohs(rlen); payload.remove_prefix(2);
+        if (payload.size() < rlen + 8 + 8 + 2) return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        const auto resource = payload.substr(0, rlen); payload.remove_prefix(rlen);
+
+        std::uint64_t ttl_ms;
+        std::memcpy(&ttl_ms, payload.data(), 8); ttl_ms = be64toh(ttl_ms); payload.remove_prefix(8);
+
+        std::uint64_t max_wait_ms;
+        std::memcpy(&max_wait_ms, payload.data(), 8); max_wait_ms = be64toh(max_wait_ms); payload.remove_prefix(8);
+
+        std::uint16_t olen;
+        std::memcpy(&olen, payload.data(), 2); olen = ntohs(olen); payload.remove_prefix(2);
+        std::string_view owner_token;
+        if (olen > 0 && payload.size() >= olen)
+        {
+            owner_token = payload.substr(0, olen);
+            payload.remove_prefix(olen);
+        }
+
+        bool ephemeral = false;
+        if (!payload.empty())
+        {
+            ephemeral = (payload[0] != 0);
+            payload.remove_prefix(1);
+        }
+
+        std::uint64_t session_id = 0;
+        if (payload.size() >= 8)
+        {
+            std::memcpy(&session_id, payload.data(), 8);
+            session_id = be64toh(session_id);
+            payload.remove_prefix(8);
+        }
+
+        const auto res = domain::lock::GetGlobalLockWaitQueue().WaitOrAcquire(
+            *store_, resource, ttl_ms, max_wait_ms, owner_token, session_id, ephemeral);
+
+        if (!res.ok)
+        {
+            return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
+        }
+
+        if (aof_writer_ && res.acquired)
+        {
+            aof_writer_->Append("GK.LOCK_ACQUIRE", "{\"resource\":" + protocol::QuoteJson(resource) +
+                ",\"ttl_ms\":" + std::to_string(ttl_ms) + ",\"owner_token\":" + protocol::QuoteJson(res.owner_token) + "}");
+        }
+
+        std::string resp;
+        resp.push_back(static_cast<char>(res.acquired ? protocol::gkwp2::BinaryStatus::Ok : protocol::gkwp2::BinaryStatus::Conflict));
+        resp.push_back(res.acquired ? 1 : 0);
+
+        std::uint64_t fencing_net = htobe64(res.fencing_token);
+        resp.append(reinterpret_cast<const char*>(&fencing_net), 8);
+
+        std::uint64_t ttl_net = htobe64(res.ttl_remaining_ms);
+        resp.append(reinterpret_cast<const char*>(&ttl_net), 8);
+
+        std::uint16_t tok_len = htons(static_cast<std::uint16_t>(res.owner_token.size()));
+        resp.append(reinterpret_cast<const char*>(&tok_len), 2);
+        resp.append(res.owner_token);
+        return resp;
+    }
+default:
         return std::string(1, static_cast<char>(protocol::gkwp2::BinaryStatus::Error));
     }
 }

@@ -71,6 +71,20 @@ func (s *GKWP2Session) Execute(ctx context.Context, req RequestConfig) error {
 		binary.BigEndian.PutUint64(payload[offset:offset+8], req.Limit)
 		binary.BigEndian.PutUint64(payload[offset+8:offset+16], req.WindowMs)
 		binary.BigEndian.PutUint32(payload[offset+16:offset+20], uint32(req.Cost))
+	case OpLock:
+		k := []byte(req.Key)
+		payload = make([]byte, 2+2+len(k)+8+2+1+8)
+		binary.BigEndian.PutUint16(payload[0:2], 0x0130)
+		binary.BigEndian.PutUint16(payload[2:4], uint16(len(k)))
+		copy(payload[4:], k)
+		offset := 4 + len(k)
+		binary.BigEndian.PutUint64(payload[offset:offset+8], 60000) // ttl_ms = 60000
+		offset += 8
+		binary.BigEndian.PutUint16(payload[offset:offset+2], 0) // owner_token len = 0 (auto-generate)
+		offset += 2
+		payload[offset] = 0 // ephemeral = false
+		offset += 1
+		binary.BigEndian.PutUint64(payload[offset:offset+8], 0) // session_id = 0
 	default:
 		return fmt.Errorf("unsupported op: %s", req.Op)
 	}

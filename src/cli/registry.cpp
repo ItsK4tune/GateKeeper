@@ -268,6 +268,61 @@ Registry::Registry(RequestExecutor execute_remote)
             return Result{"INVALID_ARGUMENTS: GK.IDEM_GET key", false, 1};
         return FormatResponse(execute_remote("GK.IDEM_GET", "{\"key\":" + protocol::QuoteJson(args[0]) + "}"));
     });
+
+    Register("GK.LOCK_ACQUIRE", "GK.LOCK_ACQUIRE resource ttl_ms [owner_token]", [execute_remote](const Arguments& args) {
+        if (args.size() < 2 || args.size() > 3)
+        {
+            return Result{"INVALID_ARGUMENTS: GK.LOCK_ACQUIRE resource ttl_ms [owner_token]", false, 1};
+        }
+        std::string body = "{\"resource\":" + protocol::QuoteJson(args[0]) + ",\"ttl_ms\":" + args[1];
+        if (args.size() == 3)
+        {
+            body += ",\"owner_token\":" + protocol::QuoteJson(args[2]);
+        }
+        body += "}";
+        return FormatResponse(execute_remote("GK.LOCK_ACQUIRE", body));
+    });
+
+    Register("GK.LOCK_RELEASE", "GK.LOCK_RELEASE resource owner_token", [execute_remote](const Arguments& args) {
+        if (args.size() != 2)
+        {
+            return Result{"INVALID_ARGUMENTS: GK.LOCK_RELEASE resource owner_token", false, 1};
+        }
+        std::string body = "{\"resource\":" + protocol::QuoteJson(args[0]) + ",\"owner_token\":" + protocol::QuoteJson(args[1]) + "}";
+        return FormatResponse(execute_remote("GK.LOCK_RELEASE", body));
+    });
+
+    Register("GK.LOCK_EXTEND", "GK.LOCK_EXTEND resource owner_token ttl_ms", [execute_remote](const Arguments& args) {
+        if (args.size() != 3)
+        {
+            return Result{"INVALID_ARGUMENTS: GK.LOCK_EXTEND resource owner_token ttl_ms", false, 1};
+        }
+        std::string body = "{\"resource\":" + protocol::QuoteJson(args[0]) + ",\"owner_token\":" + protocol::QuoteJson(args[1]) + ",\"ttl_ms\":" + args[2] + "}";
+        return FormatResponse(execute_remote("GK.LOCK_EXTEND", body));
+    });
+
+    Register("GK.LOCK_WAIT", "GK.LOCK_WAIT resource ttl_ms [max_wait_ms]", [execute_remote](const Arguments& args) {
+        if (args.size() < 2 || args.size() > 3)
+        {
+            return Result{"INVALID_ARGUMENTS: GK.LOCK_WAIT resource ttl_ms [max_wait_ms]", false, 1};
+        }
+        std::string body = "{\"resource\":" + protocol::QuoteJson(args[0]) + ",\"ttl_ms\":" + args[1];
+        if (args.size() == 3)
+        {
+            body += ",\"max_wait_ms\":" + args[2];
+        }
+        body += "}";
+        return FormatResponse(execute_remote("GK.LOCK_WAIT", body));
+    });
+
+    Register("GK.LOCK_GET", "GK.LOCK_GET resource", [execute_remote](const Arguments& args) {
+        if (args.size() != 1)
+        {
+            return Result{"INVALID_ARGUMENTS: GK.LOCK_GET resource", false, 1};
+        }
+        return FormatResponse(execute_remote("GK.LOCK_GET", "{\"resource\":" + protocol::QuoteJson(args[0]) + "}"));
+    });
+
     Register("DEL", "DEL key [key ...]", [execute_remote](const Arguments& args) {
         if (args.empty()) return Result{"INVALID_ARGUMENTS: DEL key [key ...]", false, 1};
         std::string body = "{\"keys\":[";

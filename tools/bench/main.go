@@ -42,7 +42,7 @@ func main() {
 
 	op := driver.OpType(opStr)
 	switch op {
-	case driver.OpPing, driver.OpRateLimit, driver.OpSet, driver.OpGet:
+	case driver.OpPing, driver.OpRateLimit, driver.OpSet, driver.OpGet, driver.OpLock:
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown operation: %s\n", opStr)
 		os.Exit(1)
